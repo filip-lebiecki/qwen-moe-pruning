@@ -4,6 +4,8 @@ A learning project: shrink the Mixture-of-Experts model `Qwen/Qwen3.5-35B-A3B` o
 16 GB GPU (RTX 5070 Ti, 32 GB RAM, WSL2) by removing experts, distilling routers and
 quantizing to GGUF, with every command kept so the process can be repeated.
 
+**Read the lessons online: https://filip-lebiecki.github.io/qwen-moe-pruning/learn/**
+
 ## Where to start
 - [`learn/README.html`](learn/README.html): the full notes: pipeline, exact commands, results.
 - [`learn/start.html`](learn/start.html): learning path and cheat sheet of key numbers.
