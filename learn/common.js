@@ -119,6 +119,8 @@ function loop(fn) {
 }
 
 /* --- page chrome -------------------------------------------------------- */
+const SITE_URL = "https://filip-lebiecki.github.io/qwen-moe-pruning/learn/"; // GitHub Pages copy of these files
+const REPO_URL = "https://github.com/filip-lebiecki/qwen-moe-pruning";
 function chapterIndex() {
   const file = location.pathname.split("/").pop();
   return CHAPTERS.findIndex(([f]) => f === file);
@@ -141,6 +143,8 @@ function buildPager(container) {
   else H("a", { href: "index.html", html: "<span>Back</span>All chapters" }, nav);
   if (i < CHAPTERS.length - 1) H("a", { cls: "next", href: CHAPTERS[i + 1][0], html: `<span>Next</span>${CHAPTERS[i + 1][1]}` }, nav);
   else H("a", { cls: "next", href: "index.html", html: "<span>Done</span>All chapters" }, nav);
+  const page = location.pathname.split("/").pop();
+  H("p", { cls: "note site-links", html: `This page online: <a href="${SITE_URL}${page}">${SITE_URL.replace("https://", "")}${page}</a> · scripts and results: <a href="${REPO_URL}">GitHub</a>` }, container);
 }
 function buildCrumbs(container) {
   const i = chapterIndex();

@@ -133,6 +133,7 @@ nav.pager { display: flex; justify-content: space-between; gap: 12px; flex-wrap:
 nav.pager a { display: grid; gap: 2px; text-decoration: none; color: var(--ink); max-width: 46%; }
 nav.pager a span { font: 500 0.75rem/1.2 var(--f-mono); color: var(--ink3); text-transform: uppercase; letter-spacing: 0.07em; }
 nav.pager a.next { text-align: right; margin-left: auto; }
+.site-links { margin-top: 14px; overflow-wrap: anywhere; }
 
 .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.85rem; color: var(--ink2); }
 .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 6px; }

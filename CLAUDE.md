@@ -110,6 +110,8 @@ differ from plain at near-ties (" principle" 48.3/47.5 -> 47.0/48.7): batched-pa
 learn/start.html: learning path (6 tracks, ticks in localStorage) + cheat sheet of key numbers; linked from index.html
 and README.html. learn/quiz.js: 3-4 "Check yourself" questions per chapter/appendix (all 26), rendered above the pager by
 buildQuiz() in common.js; every chapter page loads quiz.js before common.js. New page -> add a QUIZ entry and the script tag.
+Public repo github.com/filip-lebiecki/qwen-moe-pruning, GitHub Pages serves learn/ (push to main redeploys); buildPager adds a
+"This page online" line from SITE_URL/REPO_URL in common.js to all 26 chapter pages.
 
 ## Run 1 history (keep 48; its model/GGUF files were deleted, results in results/run1-k48/)
 Done and verified:
