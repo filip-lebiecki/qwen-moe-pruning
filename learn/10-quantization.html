@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Quantization to 4 Bits</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Chapter 10</div>
+    <h1>Quantization, GGUF, Q4_K_M and IQ4_XS</h1>
+    <p class="lede">Quantization stores each weight in fewer bits. Weights are grouped into small blocks; each block gets
+      a scale, and every weight is rounded to one of 16 levels. The rounding error is the price; here you can watch it.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="try10">
+    <h2 id="try10">Try it: bits versus error</h2>
+    <div class="row">
+      <label for="bits">Bits per weight <input id="bits" type="range" min="2" max="8" value="4"></label>
+      <label for="nl"><input id="nl" type="checkbox"> non-uniform levels (IQ4_NL table, 4 bits only)</label>
+      <button class="btn" id="newblock" type="button">New block of weights</button>
+    </div>
+    <div class="row"><span class="readout" id="q-out"></span></div>
+    <div class="stage" id="q-stage"></div>
+    <p class="note">Error = root-mean-square difference between the original and the rounded weights of this block,
+      relative to the weights' own spread. Each extra bit halves the error. Size assumes 19 B parameters plus
+      0.5 bits per weight of scales.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p><b>BF16</b> is 16 bits per weight. A <b>4-bit</b> format uses about 4.5 bits including the per-block scales,
+      so the 19 B pruned model goes from 36 GiB to 9.5–11 GB, and generation gets faster too, because inference mostly
+      waits for weights to be read from memory.</p>
+    <p><b>GGUF</b> is llama.cpp's single-file format (weights, tokenizer, architecture settings).
+      <b>Q4_K_M</b> is a "k-quant": blocks of 32 inside super-blocks of 256 whose block scales are themselves stored in
+      6 bits; "M" mixes in 6-bit for a few sensitive tensors. About 4.8 bits per weight.
+      <b>IQ4_XS</b> is an "i-quant": 4.25 bits per weight with non-uniform levels that are denser near zero, where most
+      weights are. It needs the importance matrix (chapter 11) to be at its best.</p>
+  </section>
+
+  <section class="facts" aria-label="In this project">
+    <div class="fact"><span class="k">BF16 GGUF</span><span class="v">35 GB · ppl 8.55</span><span class="n">wikitext, llama-perplexity</span></div>
+    <div class="fact"><span class="k">Q4_K_M</span><span class="v">11 GB · ppl 8.52</span><span class="n">with imatrix</span></div>
+    <div class="fact"><span class="k">IQ4_XS</span><span class="v">9.5 GB · ppl 8.51</span><span class="n">with imatrix</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">llama-quantize</span><span class="n">scripts/07_gguf.sh</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const IQ4NL = [-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113]; // llama.cpp kvalues_iq4nl
+function makeBlock(seed, n = 32) { const r = rng(seed); return Array.from({ length: n }, () => gauss(r) * 0.021 + (r() < 0.06 ? gauss(r) * 0.03 : 0)); }
+function quantUniform(w, bits) {
+  const lo = Math.min(...w), hi = Math.max(...w), L = (1 << bits) - 1, sc = (hi - lo) / L;
+  const levels = Array.from({ length: L + 1 }, (_, k) => lo + k * sc);
+  return { lo, hi, sc, levels, q: w.map((x) => lo + Math.round((x - lo) / sc) * sc) };
+}
+function quantNL(w) {
+  const amax = w.reduce((m, x) => (Math.abs(x) > Math.abs(m) ? x : m), 0);
+  const sc = amax / IQ4NL[0]; // as llama.cpp: map the largest-magnitude weight onto -127
+  const levels = IQ4NL.map((k) => k * sc).sort((a, b) => a - b);
+  const q = w.map((x) => levels.reduce((b, l) => (Math.abs(l - x) < Math.abs(b - x) ? l : b), levels[0]));
+  return { lo: Math.min(...levels), hi: Math.max(...levels), sc, levels, q };
+}
+const rmse = (a, b) => Math.sqrt(a.reduce((s, x, i) => s + (x - b[i]) ** 2, 0) / a.length);
+const std = (a) => { const m = a.reduce((s, x) => s + x, 0) / a.length; return Math.sqrt(a.reduce((s, x) => s + (x - m) ** 2, 0) / a.length); };
+
+/* drawing a block of weights */
+function blockView(parent, x0, y0, w, h) {
+  const g = S("g", {}, parent);
+  const mid = y0 + h / 2;
+  S("rect", { x: x0, y: y0, width: w, height: h, rx: 6, cls: "box-soft" }, g);
+  S("line", { x1: x0, x2: x0 + w, y1: mid, y2: mid, stroke: "var(--ink3)", "stroke-width": 1 }, g);
+  const levG = S("g", {}, g);
+  const lines = { lo: S("line", { x1: x0, x2: x0 + w, stroke: "var(--h)", "stroke-dasharray": "5 4", cls: "fade hide" }, g), hi: S("line", { x1: x0, x2: x0 + w, stroke: "var(--h)", "stroke-dasharray": "5 4", cls: "fade hide" }, g) };
+  const n = 32, bw = (w - 20) / n;
+  const bars = [], errs = [], dots = [];
+  for (let k = 0; k < n; k++) {
+    const bx = x0 + 10 + k * bw;
+    bars.push(S("rect", { x: bx + 2, y: mid, width: bw - 4, height: 0, rx: 2, cls: "f-h" }, g));
+    errs.push(S("rect", { x: bx + 2, y: mid, width: bw - 4, height: 0, cls: "f-cut fade hide" }, g));
+    dots.push(S("rect", { x: bx + 1, y: mid, width: bw - 2, height: 2.4, cls: "f-act fade hide" }, g));
+  }
+  let S_ = 1;
+  const yOf = (v) => mid - v * S_;
+  return {
+    setScale(maxAbs) { S_ = (h / 2 - 12) / maxAbs; },
+    bars(vals, ms = 600) { vals.forEach((v, k) => { const y = yOf(v); animAttrs(bars[k], { y: Math.min(y, mid), height: Math.abs(y - mid) }, ms); }); },
+    marks(vals, on) { vals.forEach((v, k) => { dots[k].setAttribute("y", yOf(v) - 1.2); show(dots[k], on); }); },
+    errors(a, b, on) { a.forEach((v, k) => { const y1 = yOf(v), y2 = yOf(b[k]); errs[k].setAttribute("y", Math.min(y1, y2)); errs[k].setAttribute("height", Math.max(1.2, Math.abs(y1 - y2))); show(errs[k], on); }); },
+    minmax(lo, hi, on) { lines.lo.setAttribute("y1", yOf(lo)); lines.lo.setAttribute("y2", yOf(lo)); lines.hi.setAttribute("y1", yOf(hi)); lines.hi.setAttribute("y2", yOf(hi)); show(lines.lo, on); show(lines.hi, on); },
+    levels(ls, on) { clear(levG); if (!on) return; ls.forEach((l) => S("line", { x1: x0, x2: x0 + w, y1: yOf(l), y2: yOf(l), stroke: "var(--route)", "stroke-opacity": 0.45, "stroke-width": 1 }, levG)); },
+  };
+}
+
+const W = 960, HH = 460;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "A block of 32 weights quantized to 16 levels");
+S("text", { x: 24, y: 32, "font-size": 14, "font-weight": 600, text: "one block: 32 consecutive weights of a matrix" }, svg);
+const sub = S("text", { x: 24, y: 50, "font-size": 11.5, cls: "t-dim", text: "" }, svg);
+const BV = blockView(svg, 24, 64, 600, 370);
+const block = makeBlock(3);
+const maxAbs = Math.max(...block.map(Math.abs)) * 1.05;
+BV.setScale(maxAbs);
+const U = quantUniform(block, 4), NL = quantNL(block);
+
+/* right panel */
+const P = { x: 660 };
+const panel = S("g", {}, svg);
+const lines = Array.from({ length: 12 }, (_, k) => S("text", { x: P.x, y: 80 + k * 24, "font-size": k % 3 === 0 ? 13 : 12.5, cls: "t-mono", text: "" }, panel));
+function say(rows) { lines.forEach((l, k) => { const r = rows[k] || ["", ""]; l.textContent = r[0]; l.setAttribute("class", "t-mono " + (r[1] || "")); }); }
+const sizeG = S("g", { cls: "fade hide" }, svg);
+const SZ = [["BF16", 35, 8.55, "f-ink3"], ["Q4_K_M", 11, 8.52, "f-h"], ["IQ4_XS", 9.5, 8.51, "f-keep"]];
+S("text", { x: P.x, y: 300, "font-size": 13, "font-weight": 600, text: "the 19 B pruned model on disk" }, sizeG);
+const sizeBars = SZ.map(([n, gb, ppl, c], k) => {
+  const y = 316 + k * 40;
+  S("text", { x: P.x, y: y + 14, "font-size": 12, cls: "t-mono", text: n }, sizeG);
+  const b = S("rect", { x: P.x + 64, y, width: 0, height: 20, rx: 3, cls: c }, sizeG);
+  S("text", { x: P.x + 64 + gb * 5.4 + 6, y: y + 15, "font-size": 11.5, cls: "t-mono", text: `${gb} GB · ppl ${ppl}` }, sizeG);
+  return [b, gb];
+});
+
+const fmtW = (v) => (v >= 0 ? "+" : "") + v.toFixed(4);
+const steps = [
+  { title: "32 weights in BF16", text: "Each bar is one weight of a matrix, stored as a 16-bit number. Most weights are small and close to zero; a few are larger." },
+  { title: "Find the smallest and largest weight", text: "The quantizer only needs to cover the range of this block, from its minimum to its maximum." },
+  { title: "4 bits = 16 levels", text: "Split the range into 16 evenly spaced levels. Store one scale = (max − min) / 15 and the minimum for the block." },
+  { title: "Round every weight to the nearest level", text: "Each weight now becomes a 4-bit integer 0–15 meaning \"this many steps of size scale above the minimum\". The amber marks show where the original values were.", ms: 6000 },
+  { title: "The rounding error", text: "Red shows how far each weight moved. The error is never more than half a step. Spread over billions of weights, that small noise is what can reduce quality." },
+  { title: "Count the bits", text: "32 weights x 4 bits + a 16-bit scale + a 16-bit minimum = 160 bits, 5 bits per weight. k-quants store the per-block scales in 6 bits inside super-blocks of 256, which brings Q4_K down to about 4.5." },
+  { title: "Non-uniform levels (IQ4_NL / IQ4_XS)", text: "Weights cluster near zero, so i-quants place their 16 levels more densely there. Same 4 bits, smaller error for typical weights. These are llama.cpp's real IQ4_NL levels.", ms: 6500 },
+  { title: "Result on the real model", text: "With an importance matrix (next chapter) both 4-bit files scored within noise of BF16 on wikitext: 3.2x and 3.7x smaller for free." },
+];
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    show(sizeG, i === 7);
+    sizeBars.forEach(([b, gb]) => animAttrs(b, { width: i === 7 ? gb * 5.4 : 0 }, 900));
+    const Q = i === 6 ? NL : U;
+    BV.minmax(U.lo, U.hi, i >= 1 && i <= 5);
+    BV.levels(Q.levels, i >= 2);
+    BV.bars(i >= 3 ? Q.q : block);
+    BV.marks(block, i >= 3);
+    BV.errors(block, Q.q, i >= 4);
+    sub.textContent = i === 6 ? "violet lines: the 16 non-uniform IQ4_NL levels" : i >= 2 ? "violet lines: the 16 levels" : "bars: exact BF16 values";
+    const eU = rmse(block, U.q), eN = rmse(block, NL.q);
+    if (i === 0) say([["weights (first 4)"], [block.slice(0, 2).map(fmtW).join("  "), "t-dim"], [block.slice(2, 4).map(fmtW).join("  "), "t-dim"], ["16 bits each", "t-dim"], ["32 x 16 = 512 bits"]]);
+    if (i === 1) say([["min / max"], [`min ${fmtW(U.lo)}`, "t-h"], [`max ${fmtW(U.hi)}`, "t-h"]]);
+    if (i === 2) say([["scale"], [`(max − min) / 15`], [`= ${U.sc.toFixed(5)}`, "t-route"]]);
+    if (i === 3) say([["first 4 weights → level"], ...block.slice(0, 4).map((w) => [`${fmtW(w)} → ${Math.round((w - U.lo) / U.sc)}`, "t-dim"])]);
+    if (i === 4) say([["rounding error"], [`RMSE ${eU.toFixed(5)}`, "t-cut"], [`= ${((eU / std(block)) * 100).toFixed(1)}% of the spread`, "t-dim"], [`max ½ step = ${(U.sc / 2).toFixed(5)}`, "t-dim"]]);
+    if (i === 5) say([["bits for this block"], ["32 x 4 = 128 weights", "t-dim"], ["+ 16 scale + 16 min", "t-dim"], ["= 160 bits → 5.0 / weight"], ["Q4_K: ≈ 4.5 / weight", "t-h"], ["Q4_K_M: ≈ 4.8 (mix)", "t-h"]]);
+    if (i === 6) say([["same 4 bits"], [`uniform RMSE ${eU.toFixed(5)}`, "t-dim"], [`IQ4_NL RMSE ${eN.toFixed(5)}`, eN < eU ? "t-keep" : "t-cut"], [`${eN < eU ? "smaller" : "larger"} by ${(Math.abs(1 - eN / eU) * 100).toFixed(0)}%`, "t-dim"]]);
+    if (i === 7) say([["wikitext perplexity"], ["BF16    8.55 ± 0.09", "t-dim"], ["Q4_K_M  8.52 ± 0.09", "t-dim"], ["IQ4_XS  8.51 ± 0.09", "t-dim"]]);
+  },
+});
+
+/* try it */
+const qs = document.getElementById("q-stage");
+const qsv = svgRoot(qs, 760, 260, "Your block of weights");
+const TV = blockView(qsv, 10, 10, 740, 240);
+let seed = 3, tblock = makeBlock(seed);
+function tryQ() {
+  const bits = +document.getElementById("bits").value, nlBox = document.getElementById("nl");
+  nlBox.disabled = bits !== 4; if (bits !== 4) nlBox.checked = false;
+  TV.setScale(Math.max(...tblock.map(Math.abs)) * 1.05);
+  const Q = nlBox.checked ? quantNL(tblock) : quantUniform(tblock, bits);
+  TV.levels(Q.levels, bits <= 5); TV.bars(Q.q, 250); TV.marks(tblock, true); TV.errors(tblock, Q.q, true);
+  const e = rmse(tblock, Q.q) / std(tblock), gb = (19e9 * ((nlBox.checked ? 4.25 : bits) + 0.5)) / 8 / 1e9;
+  document.getElementById("q-out").textContent = `${bits} bits · ${1 << bits} levels · error ${(e * 100).toFixed(1)}% of spread · 19 B model ≈ ${gb.toFixed(1)} GB`;
+}
+document.getElementById("bits").addEventListener("input", tryQ);
+document.getElementById("nl").addEventListener("change", tryQ);
+document.getElementById("newblock").addEventListener("click", () => { seed++; tblock = makeBlock(seed); tryQ(); });
+tryQ();
+</script>
+</body>
+</html>

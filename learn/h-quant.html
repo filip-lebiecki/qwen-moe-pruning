@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Quantization Trade-offs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+<style>
+  .pick { display: grid; gap: 6px; }
+  .pick .opt { display: grid; grid-template-columns: 11em 6em minmax(0, 1fr) 5em; gap: 10px; align-items: center; font-size: 0.9rem; padding: 6px 8px; border-radius: 6px; }
+  .pick .opt.best { background: var(--keep-soft); }
+  .pick .opt.nofit { opacity: 0.45; }
+  .pick .bar { height: 10px; border-radius: 3px; background: var(--h); }
+  .pick .mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Appendix H · step 4</div>
+    <h1>The quantization curve: how many bits are enough?</h1>
+    <p class="lede">The same 19 B model at nine sizes, from 8 bits per weight down to 2, each measured for quality, speed and
+      benchmark score, plus the original 35 B squeezed to the same file size. Chapter 10 explained how quantization works;
+      this page shows what each step down costs.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="tH">
+    <h2 id="tH">Try it: what should I download for my GPU?</h2>
+    <div class="row">
+      <label for="vram">GPU memory <input id="vram" type="range" min="4" max="32" value="16"></label>
+      <label for="ctx">reserve for context and runtime <input id="ctx" type="range" min="0" max="6" step="0.5" value="2.5"></label>
+      <span class="readout" id="vram-out"></span>
+    </div>
+    <div class="pick" id="pick"></div>
+    <p class="note">Every measured file, ranked by its average benchmark score (GSM8K, HumanEval, MMLU). Files that do not fit
+      can still run with part of the model in system RAM, but generation slows down a lot (see the speed step above).</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p><b>Read the name:</b> the number is roughly the bits per weight; <b>K</b> = k-quant (blocks inside super-blocks of 256
+      with their own quantized scales); <b>I</b> = i-quant (non-uniform levels or lattice codebooks, needs an importance
+      matrix); <b>_S / _M / _L</b> = small, medium, large mix (how many sensitive tensors get extra bits);
+      <b>XXS…XS</b> = the smallest variants of an i-quant.</p>
+    <p><b>Measure in three ways:</b> KL divergence to the full-precision model is the most sensitive (it sees every token's
+      whole distribution); perplexity shows the effect on predicting text; benchmarks show whether tasks still get solved.
+      Small KL changes may never reach a benchmark; a large one always does.</p>
+    <p><b>Choose by fit first.</b> A file that fits in VRAM with room for context is many times faster than one that spills
+      into system RAM. Within what fits, pick the largest type you can, and compare models of different sizes at the
+      same file size, not at the same bit count.</p>
+  </section>
+
+  <section class="facts" aria-label="Facts">
+    <div class="fact"><span class="k">Types measured</span><span class="v">9 + BF16</span><span class="n">Q8_0 down to IQ2_XXS, one imatrix</span></div>
+    <div class="fact"><span class="k">Quality</span><span class="v">KLD, ppl</span><span class="n">16 / 64 chunks of 2048 wikitext tokens</span></div>
+    <div class="fact"><span class="k">Tasks</span><span class="v">714 questions</span><span class="n">per type (not Q8_0, Q6_K)</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">14_quant_sweep.sh</span><span class="n">15_measure_gguf.sh, quant_report.py</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script src="h-quant-data.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const ROWS = QUANT.rows;
+const Q = ROWS.filter((r) => r.tag === "q128" && r.quant !== "BF16").sort((a, b) => a.gib - b.gib);
+const BF = ROWS.find((r) => r.tag === "q128" && r.quant === "BF16");
+const ORIG = ROWS.filter((r) => r.tag === "orig");
+const RESERVE = 2.5; // GiB for KV cache and buffers: measured, 12.4 GiB ran fully on the 16 GiB card and 14.2 did not
+const avg = (r) => (r.gsm8k != null && r.humaneval != null && r.mmlu != null ? (r.gsm8k + r.humaneval + r.mmlu) / 3 : null);
+const label = (r) => (r.tag === "orig" ? `35 B ${r.quant}` : `19 B ${r.quant}`);
+
+const W = 960, HH = 470;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "Quantization: size, quality, speed and benchmark scores");
+const G = Array.from({ length: 7 }, () => S("g", { cls: "fade hide" }, svg));
+
+/* ---- generic chart ---- */
+function chart(g, title, pts, opt) {
+  S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: title }, g);
+  const B = { x: 80, y: 60, w: 760, h: 330 };
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  const x0 = opt.x0 ?? 0, x1 = opt.x1 ?? Math.max(...xs, 1) * 1.08;
+  const ylog = !!opt.ylog;
+  const yv = (v) => (ylog ? Math.log10(v) : v);
+  const y0 = opt.y0 ?? (ylog ? Math.floor(Math.log10(Math.min(...ys))) : 0), y1 = opt.y1 ?? (ylog ? Math.ceil(Math.log10(Math.max(...ys))) : Math.max(...ys) * 1.1);
+  const X = (v) => B.x + ((v - x0) / (x1 - x0)) * B.w, Y = (v) => B.y + B.h - ((yv(v) - y0) / (y1 - y0)) * B.h;
+  S("path", { d: `M${B.x},${B.y} V${B.y + B.h} H${B.x + B.w}`, cls: "wire" }, g);
+  (opt.yticks || []).forEach((t) => { S("line", { x1: B.x, x2: B.x + B.w, y1: Y(t), y2: Y(t), stroke: "var(--grid)" }, g); S("text", { x: B.x - 8, y: Y(t) + 4, "text-anchor": "end", "font-size": 10.5, cls: "t-faint t-mono", text: opt.yfmt ? opt.yfmt(t) : t }, g); });
+  (opt.xticks || []).forEach((t) => S("text", { x: X(t), y: B.y + B.h + 16, "text-anchor": "middle", "font-size": 10.5, cls: "t-faint t-mono", text: t }, g));
+  S("text", { x: B.x + B.w, y: B.y + B.h + 34, "text-anchor": "end", "font-size": 11.5, cls: "t-dim", text: opt.xlab }, g);
+  S("text", { x: B.x, y: B.y - 8, "font-size": 11.5, cls: "t-dim", text: opt.ylab }, g);
+  (opt.vlines || []).forEach(([v, lab, col]) => { S("line", { x1: X(v), x2: X(v), y1: B.y, y2: B.y + B.h, stroke: col, "stroke-width": 1.6, "stroke-dasharray": "5 4" }, g); S("text", { x: X(v) + 5, y: B.y + 14, "font-size": 11, fill: col, text: lab }, g); });
+  (opt.hlines || []).forEach(([v, lab, col]) => { S("line", { x1: B.x, x2: B.x + B.w, y1: Y(v), y2: Y(v), stroke: col, "stroke-width": 1.4, "stroke-dasharray": "5 4" }, g); S("text", { x: B.x + B.w - 4, y: Y(v) - 5, "text-anchor": "end", "font-size": 11, fill: col, text: lab }, g); });
+  const line = pts.filter((p) => !p.alone);
+  if (line.length > 1) S("path", { d: line.map((p, k) => `${k ? "L" : "M"}${X(p.x)},${Y(p.y)}`).join(" "), fill: "none", stroke: opt.col || "var(--h)", "stroke-width": 2.2 }, g);
+  pts.forEach((p) => {
+    if (p.ci) S("line", { x1: X(p.x), x2: X(p.x), y1: Y(p.ci[0]), y2: Y(p.ci[1]), stroke: p.col || opt.col || "var(--h)", "stroke-width": 1.4, "stroke-opacity": 0.6 }, g);
+    S(p.alone ? "rect" : "circle", p.alone ? { x: X(p.x) - 6, y: Y(p.y) - 6, width: 12, height: 12, transform: `rotate(45 ${X(p.x)} ${Y(p.y)})`, fill: p.col || "var(--act)" } : { cx: X(p.x), cy: Y(p.y), r: 5, fill: p.col || opt.col || "var(--h)" }, g);
+    if (p.lab && p.rot) S("text", { x: X(p.x) + 3, y: Y(p.y) - 10, transform: `rotate(${p.rot} ${X(p.x) + 3} ${Y(p.y) - 10})`, "font-size": 11, cls: "t-mono", text: p.lab }, g); // crowded points: slanted labels
+    else if (p.lab) S("text", { x: X(p.x) + 8, y: Y(p.y) - 8, "font-size": 11, cls: "t-mono", text: p.lab }, g);
+  });
+  return { X, Y };
+}
+
+/* 0: name decoder */
+const g0 = G[0];
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "reading a quantization name" }, g0);
+const NAMES = [
+  ["Q4_K_M", [["Q", "quantized"], ["4", "≈ 4 bits per weight (4.5 with scales)"], ["K", "k-quant: blocks of 32 in super-blocks of 256, scales quantized too"], ["M", "medium mix: some sensitive tensors get 5–6 bits"]]],
+  ["IQ3_XXS", [["I", "i-quant: non-uniform levels / lattice codebooks"], ["Q3", "≈ 3 bits per weight (3.06)"], ["XXS", "the smallest variant of this family"], ["", "needs an importance matrix to be good"]]],
+  ["Q8_0", [["Q", "quantized"], ["8", "8 bits per weight (8.5 with scales)"], ["_0", "legacy block format: one scale per 32 weights, no offset"], ["", "almost lossless; half the size of BF16"]]],
+];
+const nameT = S("text", { x: 60, y: 120, "font-size": 56, "font-weight": 700, cls: "t-mono", text: "" }, g0);
+const partT = [0, 1, 2, 3].map((k) => ({ a: S("text", { x: 60, y: 200 + k * 50, "font-size": 22, "font-weight": 700, cls: "t-act t-mono", text: "" }, g0), b: S("text", { x: 170, y: 200 + k * 50, "font-size": 15, text: "" }, g0) }));
+let nameIdx = 0;
+function showName(k) { const [n, parts] = NAMES[k]; nameT.textContent = n; partT.forEach((p, j) => { p.a.textContent = parts[j] ? parts[j][0] : ""; p.b.textContent = parts[j] ? parts[j][1] : ""; }); }
+
+/* 1: sizes */
+const g1 = G[1];
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "file size of each type (19 B model) against a 16 GB GPU" }, g1);
+const sizeRows = [...(BF ? [BF] : []), ...Q.slice().reverse()];
+const SB = { x: 120, w: 760, max: Math.max(36, ...sizeRows.map((r) => r.gib)) };
+const sizeBars = sizeRows.map((r, k) => {
+  const y = 56 + k * 36;
+  S("text", { x: 110, y: y + 15, "text-anchor": "end", "font-size": 12, cls: "t-mono", text: r.quant }, g1);
+  const b = S("rect", { x: SB.x, y, width: 0, height: 22, rx: 3, cls: r.gib <= QUANT.gpu_gib - RESERVE ? "f-keep" : "f-cut" }, g1);
+  S("text", { x: SB.x + (r.gib / SB.max) * SB.w + 6, y: y + 16, "font-size": 11.5, cls: "t-mono t-dim", text: `${r.gib.toFixed(1)} GiB · ${r.bpw} bpw` }, g1);
+  return [b, r.gib];
+});
+const gpuX = SB.x + ((QUANT.gpu_gib - RESERVE) / SB.max) * SB.w;
+S("line", { x1: gpuX, x2: gpuX, y1: 48, y2: 56 + sizeRows.length * 36, stroke: "var(--act)", "stroke-width": 2, "stroke-dasharray": "5 4" }, g1);
+S("text", { x: gpuX + 6, y: 46, "font-size": 11, cls: "t-act", text: "16 GiB GPU minus ~2.5 GiB for context and buffers" }, g1);
+
+/* 2: KL divergence vs bits; 3: perplexity; 4: speed; 5: benchmarks; 6: same-size */
+const kldPts = Q.filter((r) => r.kld != null).map((r) => ({ x: r.bpw, y: Math.max(r.kld, 1e-4), lab: r.quant }));
+if (kldPts.length) chart(G[2], "quality loss: KL divergence to BF16 (log scale, lower = closer to the original)", kldPts,
+  { ylog: true, xlab: "bits per weight", ylab: "mean KL divergence", xticks: [2, 3, 4, 5, 6, 7, 8], x0: 1.5, x1: 9, yticks: [0.0001, 0.001, 0.01, 0.1, 1].filter((t) => t >= Math.min(...kldPts.map((p) => p.y)) / 10 && t <= Math.max(...kldPts.map((p) => p.y)) * 10), yfmt: (t) => t, col: "var(--route)" });
+else S("text", { x: 24, y: 60, "font-size": 13, cls: "t-dim", text: "KL divergence results not available yet." }, G[2]);
+
+const pplPts = Q.filter((r) => r.ppl != null).map((r) => ({ x: r.bpw, y: r.ppl, lab: r.quant }));
+if (pplPts.length) chart(G[3], "wikitext perplexity of the 19 B model at each size (lower is better)", pplPts,
+  { xlab: "bits per weight", ylab: "perplexity", xticks: [2, 3, 4, 5, 6, 7, 8], x0: 1.5, x1: 9, y0: Math.floor(Math.min(...pplPts.map((p) => p.y)) - 0.5), y1: Math.ceil(Math.max(...pplPts.map((p) => p.y)) + 0.5),
+    yticks: Array.from({ length: 12 }, (_, k) => Math.floor(Math.min(...pplPts.map((p) => p.y)) - 0.5) + k).filter((t) => t <= Math.max(...pplPts.map((p) => p.y)) + 0.5), hlines: BF ? [[BF.ppl, `BF16 ${BF.ppl.toFixed(2)}`, "var(--keep)"]] : [] });
+
+const spPts = [...Q, ...(BF ? [BF] : [])].filter((r) => r.gen_tok_s != null).sort((a, b) => a.gib - b.gib).map((r) => ({ x: r.gib, y: r.gen_tok_s, lab: r.quant, rot: r.gib <= QUANT.gpu_gib - RESERVE ? -72 : 0, col: r.gib <= QUANT.gpu_gib - RESERVE ? "var(--keep)" : "var(--cut)" }));
+if (spPts.length) chart(G[4], "generation speed: tokens per second against file size", spPts,
+  { xlab: "file size (GiB)", ylab: "tokens / s (one request)", xticks: [5, 10, 15, 20, 25, 30, 35], x0: 0, x1: 38, yticks: [0, 50, 100, 150, 200, 250], y1: 250, vlines: [[QUANT.gpu_gib - RESERVE, "fits on the GPU ←", "var(--act)"]], col: "var(--ink3)" });
+
+const benchRows = [...Q.filter((r) => avg(r) != null), ...ORIG.filter((r) => avg(r) != null)];
+const bPts = (task, col) => Q.filter((r) => r[task] != null).map((r) => ({ x: r.gib, y: r[task], ci: r[task + "_ci"], col }));
+const g5 = G[5];
+if (benchRows.length) {
+  const all = [...bPts("gsm8k", "var(--act)"), ...bPts("humaneval", "var(--h)"), ...bPts("mmlu", "var(--route)")];
+  const c = chart(g5, "benchmarks against file size (19 B lines; ◆ = original 35 B)", [], { xlab: "file size (GiB)", ylab: "% correct", xticks: [5, 10, 15, 20], x0: 3, x1: 22, y0: 20, y1: 100, yticks: [20, 40, 60, 80, 100] });
+  [["gsm8k", "var(--act)", "GSM8K"], ["humaneval", "var(--h)", "HumanEval"], ["mmlu", "var(--route)", "MMLU"]].forEach(([task, col, name], k) => {
+    const pts = Q.filter((r) => r[task] != null);
+    if (pts.length > 1) S("path", { d: pts.map((r, j) => `${j ? "L" : "M"}${c.X(r.gib)},${c.Y(r[task])}`).join(" "), fill: "none", stroke: col, "stroke-width": 2.2 }, g5);
+    pts.forEach((r) => { S("line", { x1: c.X(r.gib), x2: c.X(r.gib), y1: c.Y(r[task + "_ci"][0]), y2: c.Y(r[task + "_ci"][1]), stroke: col, "stroke-opacity": 0.5 }, g5); S("circle", { cx: c.X(r.gib), cy: c.Y(r[task]), r: 4.5, fill: col }, g5); });
+    ORIG.filter((r) => r[task] != null && r.gib <= 22).forEach((r) => S("rect", { x: c.X(r.gib) - 6, y: c.Y(r[task]) - 6, width: 12, height: 12, transform: `rotate(45 ${c.X(r.gib)} ${c.Y(r[task])})`, fill: col }, g5));
+    S("rect", { x: 620, y: 70 + k * 20, width: 12, height: 12, rx: 3, fill: col }, g5); S("text", { x: 638, y: 81 + k * 20, "font-size": 12, cls: "t-dim", text: name }, g5);
+  });
+  void all;
+} else S("text", { x: 24, y: 60, "font-size": 13, cls: "t-dim", text: "Benchmark results not available yet." }, g5);
+
+/* 6: same size */
+const g6 = G[6];
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "the same file size, two models: average benchmark score" }, g6);
+const near = [...Q, ...ORIG].filter((r) => avg(r) != null).sort((a, b) => a.gib - b.gib);
+near.forEach((r, k) => {
+  const y = 60 + k * 30, v = avg(r);
+  S("text", { x: 190, y: y + 15, "text-anchor": "end", "font-size": 12, cls: "t-mono", text: `${label(r)} (${r.gib.toFixed(1)} GiB)` }, g6);
+  const b = S("rect", { x: 200, y: y + 2, width: (v / 100) * 600, height: 18, rx: 3, fill: r.tag === "orig" ? "var(--act)" : "var(--h)" }, g6);
+  void b;
+  S("text", { x: 206 + (v / 100) * 600, y: y + 16, "font-size": 11.5, cls: "t-mono", text: v.toFixed(1) }, g6);
+});
+if (!near.length) S("text", { x: 24, y: 60, "font-size": 13, cls: "t-dim", text: "Results not available yet." }, g6);
+
+let nameTimer = null;
+const steps = [
+  { title: "Reading a quantization name", text: "Q4_K_M, IQ3_XXS, Q8_0: the number is roughly the bits per weight, the letters say how the bits are organised. Each name is decoded in turn.", ms: 9000 },
+  { title: "Sizes against your GPU", text: "The same 19 B model from BF16 (16 bits) down to IQ2_XXS (about 2). Green fits in 16 GB with room for context; red does not, and has to spill into system RAM." },
+  { title: "Quality: KL divergence", text: "How far each version's next-token distributions are from BF16, on 16 x 2048 wikitext tokens. It is the most sensitive measure, and on a log scale each step down in bits shows a clear jump.", ms: 7000 },
+  { title: "Quality: perplexity", text: "The same story through perplexity. The green line is BF16. Above about 4 bits the curve is flat; below it, it climbs ever faster." },
+  { title: "Speed", text: "Generation tokens per second. Everything that fits on the GPU is fast; what spills into system RAM is several times slower. Below the fit, smaller is only a little faster, because MoE speed depends on the ~3 B active weights.", ms: 7000 },
+  { title: "Benchmarks", text: "GSM8K, HumanEval and MMLU at each size, with 95% intervals. The diamonds are the original 35 B, squeezed to 2–3 bits to land at a similar file size.", ms: 8000 },
+  { title: "Same file size, which model?", text: "The real question when choosing: for the bytes your GPU holds, is a smaller model at more bits better than a bigger model at fewer bits? The bars give the measured answer for this pair." },
+];
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    if (nameTimer) { clearInterval(nameTimer); nameTimer = null; }
+    G.forEach((g, k) => show(g, k === i));
+    sizeBars.forEach(([b, v]) => animAttrs(b, { width: i === 1 ? (v / SB.max) * SB.w : 0 }, 900));
+    if (i === 0) { showName(nameIdx = 0); nameTimer = setInterval(() => showName(nameIdx = (nameIdx + 1) % NAMES.length), REDUCED ? 100000 : 3000); }
+  },
+});
+
+/* try it: picker */
+function pick() {
+  const vram = +document.getElementById("vram").value, ctx = +document.getElementById("ctx").value, room = vram - ctx;
+  document.getElementById("vram-out").textContent = `${vram} GB GPU, ${room.toFixed(1)} GB for the model`;
+  const opts = ROWS.filter((r) => avg(r) != null).map((r) => ({ r, a: avg(r), fits: r.gib * 1.074 <= room })).sort((x, y) => (y.fits - x.fits) || (y.a - x.a));
+  const box = clear(document.getElementById("pick"));
+  const best = opts.find((o) => o.fits);
+  opts.forEach((o) => {
+    const d = H("div", { cls: "opt" + (o === best ? " best" : "") + (o.fits ? "" : " nofit") }, box);
+    H("span", { cls: "mono", text: label(o.r) }, d);
+    H("span", { cls: "mono", text: `${(o.r.gib * 1.074).toFixed(1)} GB` }, d);
+    const bw = H("div", {}, d); H("div", { cls: "bar", style: { width: `${o.a}%` } }, bw);
+    H("span", { cls: "mono", text: o.a.toFixed(1) }, d);
+  });
+  if (!opts.length) H("p", { cls: "note", text: "Benchmark results are not available yet." }, box);
+}
+["vram", "ctx"].forEach((id) => document.getElementById(id).addEventListener("input", pick));
+pick();
+</script>
+</body>
+</html>

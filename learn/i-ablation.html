@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Expert Ablation and Merging</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+<style>
+  .hurt { display: grid; gap: 6px; margin-top: 10px; }
+  .hurt div { font: 0.84rem/1.45 var(--f-mono); padding: 6px 8px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); overflow-wrap: anywhere; }
+  .hurt b { color: var(--cut); }
+  .hurt .d { color: var(--ink3); margin-right: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Appendix I · step 5</div>
+    <h1>Does an expert matter? Deleting one, and merging instead of deleting</h1>
+    <p class="lede">Appendix G showed which tokens each expert receives. That is correlation. Here each named expert is deleted
+      on its own and the damage is measured token by token, on texts sorted by topic. Then the experts a prune drops are
+      merged into survivors instead of thrown away, to test the REAP paper's claim that deleting is better.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="tI">
+    <h2 id="tI">Try it: delete one expert</h2>
+    <div class="row">
+      <label for="pickx">expert <select id="pickx" class="btn"></select></label>
+      <span class="readout" id="pick-out"></span>
+    </div>
+    <div class="stage" id="try"></div>
+    <div class="hurt" id="hurt"></div>
+    <p class="note">Bars: perplexity change on each domain's 16k tokens (red = worse). Grey ticks: the share of that
+      domain's tokens for which this expert was one of the 8 picks. Below: the tokens whose loss rose most, with the text
+      before them (the token in red is the one being predicted). Real measurements from <code>16_ablate.py</code>.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p><b>Ablation turns correlation into cause.</b> Delete the part, keep everything else, and measure. Measure the
+      unchanged model twice first: here the GPU's atomic additions alone moved perplexity by up to 0.15%, more than one
+      expert's effect, until the sum was made deterministic.</p>
+    <p><b>Lift says what an expert is about; share says how much the model relies on it.</b> Experts with the most
+      characteristic tokens often handle well under 1% of a domain's tokens, and deleting them changes almost nothing,
+      because their few tokens re-route to neighbours. An expert that carries a large share of a domain (here, a geometry
+      expert with 47%) does real damage when removed, and exactly on that domain.</p>
+    <p><b>Averaging two networks needs aligned neurons.</b> The hidden neurons of an expert can be listed in any order,
+      and a neuron's up row and down column can both flip sign, without changing what it computes. Averaging two experts
+      position by position therefore mixes unrelated neurons; matching them first (the Hungarian algorithm) fixes that
+      part. It cannot fix that two different experts compute different things.</p>
+  </section>
+
+  <section class="facts" aria-label="Facts">
+    <div class="fact"><span class="k">Experts deleted one at a time</span><span class="v">7 + 9</span><span class="n">named + random controls</span></div>
+    <div class="fact"><span class="k">Test text</span><span class="v">8 x 16k tokens</span><span class="n">biology … geometry … code, web</span></div>
+    <div class="fact"><span class="k">Repeat run</span><span class="v">0.0000%</span><span class="n">after the deterministic sum</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">16_ablate.py</span><span class="n">17_expert_similarity.py, 05_eval.py --merge</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script src="i-ablation-data.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const DOM = ABL.domains;
+const DNAME = { biology: "biology", chemistry: "chemistry", physics: "physics", algebra: "algebra", geometry: "geometry", number_theory: "number theory", code: "code", web: "web" };
+const ROWS = ABL.rows.filter((r) => r.expert != null);
+const key = (r) => `${r.layer}.${r.expert}`;
+const byKey = Object.fromEntries(ROWS.map((r) => [key(r), r]));
+const GEO = byKey["35.227"], ALG = byKey["5.39"];
+
+const W = 960, HH = 470;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "Expert ablation and merging");
+const G = Array.from({ length: 10 }, () => S("g", { cls: "fade hide" }, svg));
+const title = (g, t) => S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: t }, g);
+
+/* horizontal bars around zero, one per domain */
+function domainBars(g, x, y, w, vals, opt = {}) {
+  const lim = opt.lim || Math.max(0.2, ...DOM.map((d) => Math.abs(vals[d] || 0))) * 1.1;
+  const zero = x + (opt.signed === false ? 0 : w / 2), scale = (opt.signed === false ? w : w / 2) / lim;
+  const rowH = opt.rowH || 30, out = [];
+  DOM.forEach((d, k) => {
+    const yy = y + k * rowH, v = vals[d] || 0;
+    S("text", { x: x - 10, y: yy + 15, "text-anchor": "end", "font-size": 12, text: DNAME[d] }, g);
+    S("rect", { x, y: yy + 2, width: w, height: rowH - 10, rx: 3, cls: "f-grid" }, g);
+    const b = S("rect", { x: v >= 0 ? zero : zero + v * scale, y: yy + 2, width: Math.abs(v) * scale, height: rowH - 10, rx: 3, fill: opt.col ? opt.col(v, d) : v > 0 ? "var(--cut)" : "var(--keep)" }, g);
+    S("text", { x: v >= 0 ? zero + v * scale + 6 : zero + v * scale - 6, y: yy + 15, "text-anchor": v >= 0 ? "start" : "end", "font-size": 11, cls: "t-mono", text: opt.fmt ? opt.fmt(v) : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%` }, g);
+    out.push(b);
+  });
+  if (opt.signed !== false) S("line", { x1: zero, x2: zero, y1: y - 4, y2: y + DOM.length * rowH - 6, stroke: "var(--ink3)" }, g);
+  return out;
+}
+
+/* 0: correlation — what the geometry expert receives */
+const g0 = G[0];
+title(g0, "layer 35, expert 227: what it receives (correlation)");
+const grid0 = [];
+for (let e = 0; e < 256; e++) grid0.push(S("rect", { x: 40 + (e % 16) * 19, y: 60 + Math.floor(e / 16) * 19, width: 15, height: 15, rx: 2, cls: e === 227 ? "f-act" : "f-grid" }, g0));
+S("text", { x: 40, y: 390, "font-size": 11.5, cls: "t-dim", text: "the 256 experts of layer 35; amber = expert 227" }, g0);
+S("text", { x: 400, y: 70, "font-size": 12.5, cls: "t-dim", text: "its most characteristic tokens (appendix G, by lift):" }, g0);
+S("text", { x: 400, y: 96, "font-size": 15, cls: "t-mono t-act", text: "ilateral · AB · triangle · angles · perpendicular · BC" }, g0);
+S("text", { x: 400, y: 136, "font-size": 12.5, cls: "t-dim", text: "share of each domain's tokens it is one of the 8 picks for:" }, g0);
+if (GEO) domainBars(g0, 500, 150, 360, GEO.routed_share_pct, { signed: false, lim: 50, col: () => "var(--act)", fmt: (v) => `${v.toFixed(1)}%`, rowH: 32 });
+
+/* 1: delete it — tokens re-route */
+const g1 = G[1];
+title(g1, "delete it: the router chooses among 255, its tokens go to their next choice");
+const cells1 = [];
+for (let e = 0; e < 256; e++) cells1.push(S("rect", { x: 40 + (e % 16) * 19, y: 60 + Math.floor(e / 16) * 19, width: 15, height: 15, rx: 2, cls: "f-grid" }, g1));
+const cx = (e) => 40 + (e % 16) * 19 + 7.5, cy = (e) => 60 + Math.floor(e / 16) * 19 + 7.5;
+const r1 = rng(7), reroutes = Array.from({ length: 9 }, () => Math.floor(r1() * 256)).filter((e) => e !== 227);
+const arrows1 = reroutes.map((e) => S("line", { x1: cx(227), y1: cy(227), x2: cx(227), y2: cy(227), stroke: "var(--route)", "stroke-width": 1.6 }, g1));
+S("text", { x: 400, y: 80, "font-size": 13, text: "Deleting = pruning one expert:" }, g1);
+["its router row and weights are removed (one row of a 256 x 2048 matrix,", "one slice of the expert tensors), the softmax and top-8 run over the", "255 that are left, and each token that used it picks its 9th choice.", "", "Nothing else changes, and the other 39 layers keep all 256.", "Then the loss of every one of 131k test tokens is compared with", "the unablated model: same text, same positions, one expert less."].forEach((t, k) => S("text", { x: 400, y: 110 + k * 22, "font-size": 12.5, cls: "t-dim", text: t }, g1));
+
+/* 2: measure twice */
+const g2 = G[2];
+title(g2, "first, measure the same model twice: perplexity change with nothing deleted");
+S("text", { x: 150, y: 66, "font-size": 12.5, "font-weight": 600, cls: "t-cut", text: "before: index_add_ (GPU atomics)" }, g2);
+domainBars(g2, 150, 80, 300, ABL.repeat_nondeterministic, { lim: 0.2, col: () => "var(--cut)", fmt: (v) => `${v >= 0 ? "+" : ""}${v.toFixed(3)}%` });
+S("text", { x: 600, y: 66, "font-size": 12.5, "font-weight": 600, cls: "t-keep", text: "after: fixed-order sum" }, g2);
+const rep = (ABL.rows.find((r) => r.expert == null) || {}).ppl_change_pct || {};
+domainBars(g2, 600, 80, 300, rep, { lim: 0.2, col: () => "var(--keep)", fmt: (v) => `${v >= 0 ? "+" : ""}${v.toFixed(4)}%` });
+S("text", { x: 150, y: 345, "font-size": 12, cls: "t-dim", text: "Atomic additions finish in a different order on every run; bf16 rounding depends on the order, and 40 layers amplify it." }, g2);
+S("text", { x: 150, y: 365, "font-size": 12, cls: "t-dim", text: "Noise of ±0.15% would hide every single-expert effect below. After the fix, two runs agree to the last bit." }, g2);
+
+/* 3: where the damage lands */
+const g3 = G[3];
+title(g3, "delete 35·227: perplexity change per domain");
+if (GEO) {
+  domainBars(g3, 140, 60, 420, GEO.ppl_change_pct, { lim: 1.1 });
+  S("text", { x: 640, y: 80, "font-size": 12.5, cls: "t-dim", text: "loss change per token (millinats):" }, g3);
+  const v1 = GEO.delta_routed * 1000, v2 = GEO.delta_other * 1000, sc = 220 / 12;
+  [["tokens it handled", v1, "var(--cut)"], ["all other tokens", v2, "var(--ink3)"]].forEach(([n, v, col], k) => {
+    S("text", { x: 640, y: 116 + k * 50, "font-size": 12, text: n }, g3);
+    S("rect", { x: 640, y: 124 + k * 50, width: Math.max(1, Math.abs(v) * sc), height: 16, rx: 3, fill: col }, g3);
+    S("text", { x: 646 + Math.abs(v) * sc, y: 137 + k * 50, "font-size": 11, cls: "t-mono", text: `${v >= 0 ? "+" : ""}${v.toFixed(2)}` }, g3);
+  });
+  S("text", { x: 640, y: 250, "font-size": 12, cls: "t-dim", text: "Every one of the 16 geometry" }, g3);
+  S("text", { x: 640, y: 268, "font-size": 12, cls: "t-dim", text: "sequences got worse." }, g3);
+}
+
+/* 4: lift is not load */
+const g4 = G[4];
+title(g4, "the 'algebra expert' 5·39: characteristic words, little traffic");
+S("text", { x: 40, y: 70, "font-size": 12.5, cls: "t-dim", text: "top tokens by lift (appendix G):" }, g4);
+S("text", { x: 40, y: 96, "font-size": 15, cls: "t-mono t-act", text: "equation · substitution · quadratic · solutions" }, g4);
+if (ALG && GEO) {
+  [["5·39 'algebra'", ALG, "algebra"], ["35·227 'geometry'", GEO, "geometry"]].forEach(([n, r, d], k) => {
+    const y = 150 + k * 110;
+    S("text", { x: 40, y, "font-size": 13, "font-weight": 600, text: n }, g4);
+    const sh = r.routed_share_pct[d], pc = r.ppl_change_pct[d];
+    S("text", { x: 40, y: y + 26, "font-size": 12, cls: "t-dim", text: `share of ${d} tokens` }, g4);
+    S("rect", { x: 230, y: y + 14, width: Math.max(2, sh * 8), height: 16, rx: 3, cls: "f-act" }, g4);
+    S("text", { x: 236 + sh * 8, y: y + 27, "font-size": 11, cls: "t-mono", text: `${sh.toFixed(1)}%` }, g4);
+    S("text", { x: 40, y: y + 56, "font-size": 12, cls: "t-dim", text: `${d} perplexity change` }, g4);
+    S("rect", { x: 230, y: y + 44, width: Math.max(2, Math.abs(pc) * 380), height: 16, rx: 3, fill: pc > 0 ? "var(--cut)" : "var(--keep)" }, g4);
+    S("text", { x: 236 + Math.abs(pc) * 380, y: y + 57, "font-size": 11, cls: "t-mono", text: `${pc >= 0 ? "+" : ""}${pc.toFixed(2)}%` }, g4);
+  });
+}
+S("text", { x: 40, y: 410, "font-size": 12, cls: "t-dim", text: "Lift ranks words by how much MORE often they reach an expert. Rare words can reach a rare expert: high lift, little traffic." }, g4);
+
+/* 5: share predicts damage */
+const g5 = G[5];
+title(g5, "all 128 (expert, domain) pairs: share of the domain's tokens vs damage");
+const P5 = { x: 90, y: 60, w: 760, h: 330 };
+const X5 = (v) => P5.x + (v / 50) * P5.w, Y5 = (v) => P5.y + P5.h - ((v + 0.5) / 1.6) * P5.h;
+[-0.4, 0, 0.4, 0.8].forEach((t) => { S("line", { x1: P5.x, x2: P5.x + P5.w, y1: Y5(t), y2: Y5(t), stroke: t === 0 ? "var(--ink3)" : "var(--grid)" }, g5); S("text", { x: P5.x - 8, y: Y5(t) + 4, "text-anchor": "end", "font-size": 10.5, cls: "t-faint t-mono", text: `${t > 0 ? "+" : ""}${t}%` }, g5); });
+[0, 10, 20, 30, 40, 50].forEach((t) => S("text", { x: X5(t), y: P5.y + P5.h + 16, "text-anchor": "middle", "font-size": 10.5, cls: "t-faint t-mono", text: `${t}%` }, g5));
+S("text", { x: P5.x + P5.w, y: P5.y + P5.h + 34, "text-anchor": "end", "font-size": 11.5, cls: "t-dim", text: "share of the domain's tokens routed to the deleted expert" }, g5);
+S("text", { x: P5.x, y: P5.y - 8, "font-size": 11.5, cls: "t-dim", text: "perplexity change on that domain" }, g5);
+const dots5 = [];
+ROWS.forEach((r) => DOM.forEach((d) => {
+  const named = r.reading !== "random control";
+  const c = S("circle", { cx: X5(r.routed_share_pct[d]), cy: Y5(clamp(r.ppl_change_pct[d], -0.5, 1.1)), r: 0, fill: named ? "var(--act)" : "var(--h)", "fill-opacity": 0.75 }, g5);
+  dots5.push(c);
+  const sh = r.routed_share_pct[d], v = r.ppl_change_pct[d];
+  if (sh > 25 || Math.abs(v) > 0.3) S("text", { x: X5(sh) + 8, y: Y5(clamp(v, -0.5, 1.1)) + (key(r) === "35.53" ? 16 : key(r) === "20.241" ? -6 : 4), "font-size": 11, cls: "t-mono", text: `${key(r).replace(".", "·")} ${DNAME[d]}${key(r) === "5.55" && d === "algebra" ? " (one document)" : ""}` }, g5);
+}));
+S("circle", { cx: 640, cy: 160, r: 5, fill: "var(--act)" }, g5); S("text", { x: 650, y: 164, "font-size": 11.5, cls: "t-dim", text: "named experts (appendix G)" }, g5);
+S("circle", { cx: 640, cy: 180, r: 5, fill: "var(--h)" }, g5); S("text", { x: 650, y: 184, "font-size": 11.5, cls: "t-dim", text: "random controls" }, g5);
+
+/* 6: teams */
+const g6 = G[6];
+const TEAMS = ABL.teams || [];
+const sizes = [...new Set(TEAMS.map((t) => t.per_layer))];
+const tsize = sizes.length ? Math.min(...sizes) : null;
+title(g6, tsize ? `delete a whole team: ${tsize} experts per layer (${40 * tsize} in all), chosen on half the text, measured on the other half` : "deleting teams of experts");
+if (tsize) {
+  const rowsT = TEAMS.filter((t) => t.per_layer === tsize);
+  const cw = 76, ch = 30, x0 = 220, y0 = 80;
+  const lim = Math.max(...rowsT.flatMap((t) => DOM.map((d) => Math.abs(t.ppl_change_pct[d]))));
+  DOM.forEach((d, j) => S("text", { x: x0 + j * cw + cw / 2, y: y0 - 10, "text-anchor": "middle", "font-size": 11, cls: "t-dim", text: DNAME[d] }, g6));
+  S("text", { x: x0, y: y0 - 28, "font-size": 11.5, cls: "t-dim", text: "measured on →" }, g6);
+  rowsT.forEach((t, i) => {
+    S("text", { x: x0 - 10, y: y0 + i * ch + 19, "text-anchor": "end", "font-size": 11.5, cls: "t-mono", text: t.team.replace(/ x\d+/, " team").replace("number_theory", "number theory") }, g6);
+    DOM.forEach((d, j) => {
+      const v = t.ppl_change_pct[d], own = t.team.startsWith(d);
+      S("rect", { x: x0 + j * cw + 1, y: y0 + i * ch + 1, width: cw - 2, height: ch - 2, rx: 3, fill: "var(--cut)", "fill-opacity": clamp(Math.abs(v) / lim, 0.04, 1), stroke: own ? "var(--ink)" : "none", "stroke-width": 1.5 }, g6);
+      S("text", { x: x0 + j * cw + cw / 2, y: y0 + i * ch + 19, "text-anchor": "middle", "font-size": 10.5, cls: "t-mono", text: `${v >= 0 ? "+" : ""}${v.toFixed(1)}%` }, g6);
+    });
+  });
+} else S("text", { x: 24, y: 70, "font-size": 13, cls: "t-dim", text: "Team results not available yet." }, g6);
+
+/* 7: merging — the neuron-order problem */
+const g7 = G[7];
+title(g7, "merging two experts: line up the neurons first");
+const NN = 8, cols = ["var(--h)", "var(--act)", "var(--keep)", "var(--route)", "var(--cut)", "var(--teach)", "var(--h)", "var(--act)"];
+const shape7 = [0.9, 0.4, 0.7, 0.3, 0.8, 0.5, 0.6, 0.35];
+const perm7 = [3, 0, 6, 1, 7, 2, 5, 4], flip7 = [1, -1, 1, 1, -1, 1, -1, 1];
+const nx = (k) => 120 + k * 42;
+S("text", { x: 40, y: 92, "font-size": 12, "font-weight": 600, text: "expert A" }, g7);
+S("text", { x: 40, y: 192, "font-size": 12, "font-weight": 600, text: "expert B" }, g7);
+S("text", { x: 40, y: 292, "font-size": 12, "font-weight": 600, text: "average" }, g7);
+const neuron = (k, y, col, h, sign) => { const g = S("g", { style: { transition: REDUCED ? "none" : "transform 0.9s ease" } }, g7); S("rect", { x: nx(k), y: y - h * 50, width: 30, height: h * 50, rx: 3, fill: col }, g); g.lab = S("text", { x: nx(k) + 15, y: y + 14, "text-anchor": "middle", "font-size": 11, cls: "t-mono", text: sign < 0 ? "−" : "" }, g); return g; };
+for (let k = 0; k < NN; k++) neuron(k, 100, cols[k], shape7[k], 1);
+const bNeur = Array.from({ length: NN }, (_, k) => neuron(k, 200, cols[perm7[k]], shape7[perm7[k]], flip7[k]));
+const avgBars = Array.from({ length: NN }, (_, k) => S("rect", { x: nx(k), y: 300, width: 30, height: 0, rx: 3, fill: "var(--ink3)" }, g7));
+const links7 = Array.from({ length: NN }, (_, k) => S("line", { x1: nx(k) + 15, y1: 104, x2: nx(k) + 15, y2: 150, stroke: "var(--route)", "stroke-width": 1.4, opacity: 0 }, g7));
+const note7 = S("text", { x: 500, y: 80, "font-size": 12.5, cls: "t-dim", text: "" }, g7);
+const note7b = S("text", { x: 500, y: 100, "font-size": 12.5, cls: "t-dim", text: "" }, g7);
+const err7 = S("text", { x: 500, y: 290, "font-size": 15, "font-weight": 600, text: "" }, g7);
+let m7timer = null;
+function playMerge(i) {
+  clearTimeout(m7timer);
+  // phase 1: naive average (columns mismatched), phase 2: align (B's neurons move under their partner), phase 3: average again
+  const naive = () => {
+    bNeur.forEach((n) => { n.style.transform = ""; });
+    links7.forEach((l) => l.setAttribute("opacity", 0));
+    avgBars.forEach((b, k) => { const h = Math.abs(shape7[k] + flip7[k] * shape7[perm7[k]]) / 2; b.style.fill = "var(--ink3)"; animAttrs(b, { y: 300 - h * 50, height: h * 50 }, 500); });
+    note7.textContent = "Position by position: neuron 1 of A with neuron 1 of B, …";
+    note7b.textContent = "but B lists the same neurons in another order, some sign-flipped.";
+    err7.textContent = "naive average: 82% output error"; err7.setAttribute("class", "t-cut");
+  };
+  const aligned = () => {
+    bNeur.forEach((n, k) => { n.style.transform = `translateX(${nx(perm7[k]) - nx(k)}px)`; n.lab.textContent = ""; });
+    links7.forEach((l) => l.setAttribute("opacity", 0.8));
+    avgBars.forEach((b, k) => { b.style.fill = cols[k]; animAttrs(b, { y: 300 - shape7[k] * 50, height: shape7[k] * 50 }, 500); });
+    note7.textContent = "Match each neuron of B to its partner in A (Hungarian algorithm,";
+    note7b.textContent = "cosine of gate, up and down vectors; flips undone), then average.";
+    err7.textContent = "aligned average: 0% error"; err7.setAttribute("class", "t-keep");
+  };
+  bNeur.forEach((n, k) => n.lab.textContent = flip7[k] < 0 ? "−" : "");
+  naive();
+  if (i === 7) m7timer = setTimeout(aligned, REDUCED ? 0 : 2600);
+}
+S("text", { x: 500, y: 340, "font-size": 12, cls: "t-dim", text: "Unit test with real expert shapes (512 neurons, 2048 inputs):" }, g7);
+S("text", { x: 500, y: 360, "font-size": 12, cls: "t-dim", text: "B = A shuffled + flipped: naive avg 82% error, aligned 0%." }, g7);
+S("text", { x: 500, y: 380, "font-size": 12, cls: "t-dim", text: "B = that, plus 50% noise: naive 84%, aligned 45%." }, g7);
+S("text", { x: 500, y: 400, "font-size": 12, cls: "t-dim", text: "Aligning fixes the order; it cannot make different experts alike." }, g7);
+
+/* 8: how alike are the experts? */
+const g8 = G[8];
+title(g8, "how alike are the experts of a layer? (cosine of their outputs on the same 1,024 tokens)");
+const simL = ABL.similarity ? ABL.similarity.output.best_match_median_per_layer : null;
+if (simL) {
+  const P8 = { x: 90, y: 70, w: 760, h: 300 }, X8 = (l) => P8.x + (l / 39) * P8.w, Y8 = (v) => P8.y + P8.h - (v / 1) * P8.h;
+  [0, 0.25, 0.5, 0.75, 1].forEach((t) => { S("line", { x1: P8.x, x2: P8.x + P8.w, y1: Y8(t), y2: Y8(t), stroke: "var(--grid)" }, g8); S("text", { x: P8.x - 8, y: Y8(t) + 4, "text-anchor": "end", "font-size": 10.5, cls: "t-faint t-mono", text: t }, g8); });
+  [0, 10, 20, 30, 39].forEach((t) => S("text", { x: X8(t), y: P8.y + P8.h + 16, "text-anchor": "middle", "font-size": 10.5, cls: "t-faint t-mono", text: t }, g8));
+  S("text", { x: P8.x + P8.w, y: P8.y + P8.h + 34, "text-anchor": "end", "font-size": 11.5, cls: "t-dim", text: "layer" }, g8);
+  S("line", { x1: P8.x, x2: P8.x + P8.w, y1: Y8(1), y2: Y8(1), stroke: "var(--keep)", "stroke-dasharray": "5 4" }, g8);
+  S("text", { x: P8.x + 6, y: Y8(1) + 16, "font-size": 11.5, cls: "t-keep", text: "1.0 = the same function (e.g. an expert and its aligned shuffled copy)" }, g8);
+  S("path", { d: simL.map((v, l) => `${l ? "L" : "M"}${X8(l)},${Y8(v)}`).join(" "), fill: "none", stroke: "var(--h)", "stroke-width": 2.2 }, g8);
+  simL.forEach((v, l) => S("circle", { cx: X8(l), cy: Y8(v), r: 3, fill: "var(--h)" }, g8));
+  S("text", { x: P8.x + 6, y: Y8(0.2) - 10, "font-size": 11.5, cls: "t-h", text: "median expert's best match among the other 255" }, g8);
+} else S("text", { x: 24, y: 70, "font-size": 13, cls: "t-dim", text: "Similarity results not available yet." }, g8);
+
+/* 9: prune vs merge, one panel per K (each with its own scale) */
+const g9 = G[9];
+title(g9, "the dropped experts: delete them, or merge them into a similar survivor? (held-out perplexity)");
+const MR = ABL.merge || [];
+const orig = MR.find((m) => m.tag === "step5-original");
+[128, 48].forEach((K, p) => {
+  const rowsK = MR.filter((m) => m.name.endsWith(`K=${K}`));
+  if (!rowsK.length) return;
+  const x0 = 24 + p * 470, maxP = Math.max(...rowsK.map((m) => m.ppl.all)) * 1.15, bw = 250;
+  S("text", { x: x0, y: 66, "font-size": 13, "font-weight": 600, text: `${K} experts per layer${orig ? `  (original ${orig.ppl.all.toFixed(2)})` : ""}` }, g9);
+  rowsK.forEach((m, k) => {
+    const y = 84 + k * 56, merge = m.name.startsWith("merge");
+    S("text", { x: x0, y: y + 12, "font-size": 11.5, cls: "t-dim", text: m.name.replace(` K=${K}`, "").replace("prune", "delete (REAP prune)") }, g9);
+    S("rect", { x: x0, y: y + 18, width: (m.ppl.all / maxP) * bw, height: 18, rx: 3, fill: merge ? "var(--route)" : "var(--keep)" }, g9);
+    S("text", { x: x0 + 6 + (m.ppl.all / maxP) * bw, y: y + 32, "font-size": 11.5, cls: "t-mono", text: m.ppl.all.toFixed(2) }, g9);
+  });
+});
+if (MR.length) S("text", { x: 24, y: 400, "font-size": 11.5, cls: "t-dim", text: "Teal = delete, violet = merge. Lower is better. Every merge variant lost to deleting, and the gap grows as more experts are merged." }, g9);
+else S("text", { x: 24, y: 70, "font-size": 13, cls: "t-dim", text: "Merge results not available yet." }, g9);
+
+const steps = [
+  { title: "An expert that receives geometry", text: "Layer 35, expert 227: its most characteristic tokens are triangle, angles, perpendicular, and it is one of the 8 picks for 47% of all geometry tokens. That is what it receives. Whether the model needs it is a different question.", ms: 7000 },
+  { title: "Delete it, and only it", text: "Remove its router row and weights, exactly as pruning would. The router now chooses among 255; each token that used it re-routes to its next choice. Every other expert and layer is untouched.", ms: 6000 },
+  { title: "First, measure the measurement", text: "Running the unchanged model twice gave different losses: GPU atomic additions sum in a random order, and bf16 rounding depends on the order. After making the sum fixed-order, two runs agree exactly, so every change after this is caused by the deletion.", ms: 7500 },
+  { title: "Where the damage lands", text: "Deleting 35·227 raises geometry perplexity by about 1%, and every one of the 16 geometry texts gets worse; algebra a little, the rest not at all. Within the text, the loss rises on the tokens it handled, not on the others. Correlation confirmed as cause.", ms: 7500 },
+  { title: "Lift is not load", text: "The 'algebra expert' from appendix G has the most algebra-looking words, but it is picked for under 1% of algebra tokens. Deleting it changes algebra by +0.01%: its few tokens re-route to neighbours that do almost as well.", ms: 7000 },
+  { title: "Share predicts damage", text: "All 16 deleted experts against all 8 domains. Below about 10% share, deleting an expert changes nothing measurable; the few experts that carry a quarter or more of a domain's tokens are the only ones that hurt it.", ms: 7000 },
+  { title: "Delete a whole team", text: "In every layer, delete the 4 experts most specific to one domain that also carry its traffic (160 of 10,240, chosen on half the texts, measured on the other half). Each team costs its own domain 25–51% perplexity and the others little; two random teams of the same size cost under 1.2% anywhere. The maths domains share their experts.", ms: 9000 },
+  { title: "Merging: line the neurons up first", text: "Merging averages a dropped expert into a survivor. But an expert's 512 neurons can be listed in any order and sign-flipped without changing it, so position-by-position averaging mixes unrelated neurons. Matching them first fixes the order.", ms: 8000 },
+  { title: "Are the experts alike at all?", text: "Run all 256 experts on the same tokens and compare outputs. Except in the first and last layer, a typical expert's closest match has a cosine of about 0.02: nearly unrelated. There is little shared function for an average to keep.", ms: 7000 },
+  { title: "Delete or merge?", text: "Deleting wins at both sizes. Matching neurons helps a little, choosing partners by router similarity a little more, and keeping the full router (so tokens of a dropped expert are sent to the merged one) is worse: those tokens get an average that is close to neither original, instead of another intact expert.", ms: 9000 },
+];
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    G.forEach((g, k) => show(g, k === i));
+    cells1.forEach((c, e) => { c.setAttribute("class", e === 227 ? (i >= 1 ? "f-cut" : "f-act") : "f-grid"); });
+    arrows1.forEach((a, k) => animAttrs(a, { x2: i === 1 ? cx(reroutes[k]) : cx(227), y2: i === 1 ? cy(reroutes[k]) : cy(227) }, 900));
+    dots5.forEach((d) => animAttrs(d, { r: i === 5 ? 4.5 : 0 }, 700));
+    if (i === 7) playMerge(7); else clearTimeout(m7timer);
+  },
+});
+
+/* try it: choose an expert */
+const sel = document.getElementById("pickx");
+ROWS.forEach((r) => H("option", { value: key(r), text: `${r.layer} · ${r.expert} — ${r.reading}` }, sel));
+const trySvg = svgRoot(document.getElementById("try"), 960, 290, "Perplexity change per domain for the chosen expert");
+function tryRender() {
+  const r = byKey[sel.value];
+  clear(trySvg);
+  const lim = Math.max(1.0, ...DOM.map((d) => Math.abs(r.ppl_change_pct[d]))) * 1.05;
+  const g = S("g", {}, trySvg);
+  domainBars(g, 150, 20, 520, r.ppl_change_pct, { lim });
+  DOM.forEach((d, k) => { // share tick
+    const sh = r.routed_share_pct[d];
+    S("rect", { x: 800, y: 22 + k * 30, width: Math.max(1, sh * 2.2), height: 16, rx: 2, cls: "f-ink3" }, g);
+    S("text", { x: 806 + sh * 2.2, y: 35 + k * 30, "font-size": 10.5, cls: "t-mono t-dim", text: `${sh.toFixed(1)}%` }, g);
+  });
+  S("text", { x: 800, y: 12, "font-size": 11, cls: "t-dim", text: "share of tokens" }, g);
+  document.getElementById("pick-out").textContent = `${r.tokens_routed.toLocaleString()} test tokens used it · loss on them ${r.delta_routed >= 0 ? "+" : ""}${(r.delta_routed * 1000).toFixed(1)} millinats, on all others ${(r.delta_other * 1000).toFixed(2)}`;
+  const box = clear(document.getElementById("hurt"));
+  (ABL.examples[sel.value] || []).forEach((x) => {
+    const d = H("div", {}, box);
+    H("span", { cls: "d", text: `+${x.delta.toFixed(2)} · ${DNAME[x.domain] || x.domain}` }, d);
+    d.appendChild(document.createTextNode("…" + x.before));
+    H("b", { text: x.token }, d);
+  });
+}
+sel.value = "35.227";
+sel.addEventListener("change", tryRender);
+tryRender();
+</script>
+</body>
+</html>

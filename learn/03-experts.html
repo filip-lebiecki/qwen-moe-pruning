@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mixture of Experts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Chapter 3</div>
+    <h1>Experts and Mixture of Experts</h1>
+    <p class="lede">Instead of one big feed-forward block, each layer has 256 small ones, the experts, and every token uses
+      only 8 of them. That is how a model can store 35 B parameters but run only about 3 B per token.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="try3">
+    <h2 id="try3">Try it: experts per token</h2>
+    <div class="row">
+      <label for="topk">Experts per token (top-k) <input id="topk" type="range" min="1" max="16" value="8"></label>
+      <span class="readout" id="topk-out"></span>
+      <button class="btn" id="send" type="button">Send a token through the layer</button>
+    </div>
+    <div class="stage" id="k-stage"></div>
+    <p class="note">Active parameters = everything that is not a routed expert (attention, DeltaNet, shared experts,
+      embeddings, lm_head: 2.43 B) + k experts x 3.15 M x 40 layers. Qwen trained the model with k = 8; changing k on a
+      trained model hurts quality, the slider only shows the arithmetic. Generation speed follows active parameters,
+      memory follows total parameters.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p>An <b>expert</b> is a tiny feed-forward network: <code>gate_proj</code> and <code>up_proj</code> (2048 → 512),
+      a SiLU gate, and <code>down_proj</code> (512 → 2048). That is 3 x 2048 x 512 = 3.1 M parameters. Each layer has
+      256 of them plus one <b>shared expert</b> that every token always uses.</p>
+    <p>In the checkpoint the 256 experts are stacked into one tensor, <code>mlp.experts.gate_up_proj</code> with shape
+      <code>[256, 1024, 2048]</code>, so expert 17 is just slice <code>[17]</code>. Removing an expert means removing a
+      slice, which is why expert pruning is so mechanically simple.</p>
+    <p>The catch of MoE: you do not know which experts the next token will need, so all of them must be in memory.
+      Pruning attacks exactly that.</p>
+  </section>
+
+  <section class="facts" aria-label="In this project">
+    <div class="fact"><span class="k">One expert</span><span class="v">3,145,728 params</span><span class="n">3 x 2048 x 512</span></div>
+    <div class="fact"><span class="k">Experts in the model</span><span class="v">10,240</span><span class="n">40 layers x 256 = 32.2 B params</span></div>
+    <div class="fact"><span class="k">Used per token</span><span class="v">8 + 1 shared</span><span class="n"><code>num_experts_per_tok</code></span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">moe_forward()</span><span class="n">scripts/moe_stream.py</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const W = 960, HH = 460;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "One expert, a layer of 256 experts, and tokens choosing 8 of them");
+
+/* --- anatomy of one expert (left) --- */
+const ana = S("g", { cls: "fade" }, svg);
+S("text", { x: 24, y: 30, "font-size": 14, "font-weight": 600, text: "one expert" }, ana);
+const AX = 24;
+function vbar(x, y, h, cls, label, sub) {
+  S("rect", { x, y, width: 16, height: h, rx: 3, cls }, ana);
+  S("text", { x: x + 8, y: y + h + 16, "text-anchor": "middle", "font-size": 11, cls: "t-mono t-dim", text: label }, ana);
+  if (sub) S("text", { x: x + 8, y: y + h + 30, "text-anchor": "middle", "font-size": 10, cls: "t-faint", text: sub }, ana);
+}
+vbar(AX, 70, 200, "f-h", "x", "2048");
+const mat = (x, y, w, h, label, sub) => {
+  S("rect", { x, y, width: w, height: h, rx: 4, cls: "f-route-soft", stroke: "var(--route)" }, ana);
+  S("text", { x: x + w / 2, y: y + h / 2 + 2, "text-anchor": "middle", "font-size": 11.5, "font-weight": 600, cls: "t-route", text: label }, ana);
+  S("text", { x: x + w / 2, y: y + h / 2 + 16, "text-anchor": "middle", "font-size": 10, cls: "t-dim t-mono", text: sub }, ana);
+};
+mat(64, 70, 84, 92, "gate_proj", "2048→512");
+mat(64, 178, 84, 92, "up_proj", "2048→512");
+S("path", { d: "M40,170 H64 M40,116 H64 M40,224 H64", cls: "wire" }, ana);
+S("rect", { x: 162, y: 100, width: 40, height: 30, rx: 5, cls: "box" }, ana);
+S("text", { x: 182, y: 120, "text-anchor": "middle", "font-size": 11, text: "SiLU" }, ana);
+S("circle", { cx: 222, cy: 170, r: 12, cls: "box" }, ana);
+S("text", { x: 222, y: 175, "text-anchor": "middle", "font-size": 14, text: "×" }, ana);
+S("path", { d: "M148,116 H162 M202,116 H222 V158 M148,224 H222 V182", cls: "wire" }, ana);
+mat(246, 124, 60, 92, "down", "512→2048");
+S("path", { d: "M234,170 H246", cls: "wire" }, ana);
+vbar(316, 70, 200, "f-act", "out", "2048");
+S("path", { d: "M306,170 H316", cls: "wire" }, ana);
+S("text", { x: 24, y: 340, "font-size": 13, text: "3 matrices x 2048 x 512 =" }, ana);
+S("text", { x: 24, y: 366, "font-size": 22, "font-weight": 700, cls: "t-route", text: "3.1 M parameters" }, ana);
+S("text", { x: 24, y: 392, "font-size": 12, cls: "t-dim", text: "a small \"SwiGLU\" feed-forward network" }, ana);
+
+/* --- layer grid (middle) --- */
+const G = { x: 380, y: 64, c: 20 };
+const grid = S("g", { cls: "fade" }, svg);
+S("text", { x: G.x, y: 30, "font-size": 14, "font-weight": 600, text: "one layer: 256 routed experts" }, grid);
+S("text", { x: G.x, y: 48, "font-size": 11, cls: "t-dim", text: "expert 0 top left, expert 255 bottom right" }, grid);
+const cells = [];
+for (let e = 0; e < 256; e++) {
+  const r = S("rect", { x: G.x + (e % 16) * G.c, y: G.y + Math.floor(e / 16) * G.c, width: G.c - 3, height: G.c - 3, rx: 3, cls: "f-grid fade" }, grid);
+  cells.push(r);
+}
+const shared = S("g", { cls: "fade" }, svg);
+const sharedR = S("rect", { x: G.x, y: G.y + 16 * G.c + 12, width: 16 * G.c - 3, height: 26, rx: 5, cls: "f-grid fade" }, shared);
+S("text", { x: G.x + 8 * G.c, y: G.y + 16 * G.c + 30, "text-anchor": "middle", "font-size": 12, text: "shared expert (every token)" }, shared);
+const tokLabel = S("text", { x: G.x + 160, y: HH - 18, "text-anchor": "middle", "font-size": 16, cls: "t-mono t-h fade", text: "" }, svg);
+
+/* --- right panel: tensor stack / counters --- */
+const P = { x: 730 };
+const stack = S("g", { cls: "fade" }, svg);
+S("text", { x: P.x, y: 30, "font-size": 14, "font-weight": 600, text: "how it is stored" }, stack);
+S("text", { x: P.x, y: 50, "font-size": 11, cls: "t-mono t-dim", text: "experts.gate_up_proj" }, stack);
+S("text", { x: P.x, y: 66, "font-size": 11, cls: "t-mono t-dim", text: "[256, 1024, 2048]" }, stack);
+const slices = [];
+for (let s = 0; s < 18; s++) slices.push(S("rect", { x: P.x + 20 + s * 6, y: 86 + s * 6, width: 110, height: 120, rx: 3, cls: "f-route-soft", stroke: "var(--route)", "stroke-opacity": 0.4 }, stack));
+const hl = slices[7];
+S("text", { x: P.x + 20, y: 330, "font-size": 12, text: "expert 17 = slice [17]" }, stack);
+S("text", { x: P.x + 20, y: 348, "font-size": 11, cls: "t-dim", text: "delete a slice = delete an expert" }, stack);
+
+const count = S("g", { cls: "fade hide" }, svg);
+S("text", { x: P.x, y: 110, "font-size": 13, cls: "t-dim", text: "whole model" }, count);
+S("text", { x: P.x, y: 142, "font-size": 30, "font-weight": 700, text: "35 B" }, count);
+S("text", { x: P.x, y: 162, "font-size": 12, cls: "t-dim", text: "parameters stored" }, count);
+S("text", { x: P.x, y: 214, "font-size": 30, "font-weight": 700, cls: "t-act", text: "~3 B" }, count);
+S("text", { x: P.x, y: 234, "font-size": 12, cls: "t-dim", text: "active per token" }, count);
+S("text", { x: P.x, y: 270, "font-size": 12, text: "40 layers x 8 experts = 320 expert" }, count);
+S("text", { x: P.x, y: 286, "font-size": 12, text: "runs per token, out of 10,240" }, count);
+const memNote = S("text", { x: P.x, y: 330, "font-size": 12.5, "font-weight": 600, cls: "t-cut fade hide", text: "but all 67 GiB must be in memory" }, svg);
+
+/* token stream */
+const WORDS = [" The", " capital", " of", " Australia", " is", " Canberra", ",", " not", " Sydney", "."];
+function pick(seed, k = 8) {
+  const r = rng(seed * 7919 + 13), sc = Array.from({ length: 256 }, (_, e) => r() + (e % 37 === seed % 37 ? 0.4 : 0));
+  return sc.map((v, e) => [v, e]).sort((a, b) => b[0] - a[0]).slice(0, k).map(([, e]) => e);
+}
+function light(set, cls = "f-act") { cells.forEach((c, e) => c.setAttribute("class", (set.has(e) ? cls : "f-grid") + " fade")); }
+let streamLoop = null, wIdx = 0;
+function sendToken() {
+  const w = WORDS[wIdx % WORDS.length]; wIdx++;
+  tokLabel.textContent = `token: "${w.replace(/^ /, "␣")}"`;
+  light(new Set(pick(wIdx)));
+  sharedR.setAttribute("class", "f-act fade");
+}
+function startStream() {
+  let acc = 0;
+  streamLoop = loop((dt) => { acc += dt; if (acc > 900) { acc = 0; sendToken(); } });
+  streamLoop.start();
+}
+function stopStream() { if (streamLoop) { streamLoop.stop(); streamLoop = null; } }
+
+const steps = [
+  { title: "One expert is a tiny network", text: "Three matrices: gate_proj and up_proj expand the 2048 numbers to 512, a SiLU gate mixes them, down_proj brings them back to 2048. 3.1 M parameters." },
+  { title: "Each layer holds 256 of them", text: "All 256 have the same shape but learned different things during training. There is also one shared expert that every token always uses." },
+  { title: "Stored as one stacked tensor", text: "The checkpoint keeps the 256 experts of a layer in one tensor of shape [256, 1024, 2048] (gate and up together) plus down_proj [256, 2048, 512]. Expert 17 is slice [17]." },
+  { title: "A token uses only 8 of them", text: "The router (next chapter) picks the 8 experts that fit this token best. The other 248 are not computed at all for this token." },
+  { title: "Every token picks different experts", text: "Watch the pattern change from token to token. Over a long text all experts get used, but each token touches only a few.", ms: 7000 },
+  { title: "35 B stored, about 3 B active", text: "That is what 35B-A3B means. Per token, the model runs 8 of 256 experts in each of 40 layers, plus the always-on parts. Speed is close to a 3 B dense model." },
+  { title: "The catch: everything must be in memory", text: "The next token might need any expert, so all 10,240 experts must be loaded: 67 GiB in BF16. Pruning removes experts that are rarely important, so less has to be stored." },
+];
+
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    stopStream();
+    ana.style.opacity = i === 0 ? 1 : 0.35;
+    show(grid, i >= 1); show(shared, i >= 1);
+    show(stack, i === 2); show(count, i >= 5); show(memNote, i === 6);
+    slices.forEach((s) => { s.style.fill = ""; s.style.strokeOpacity = ""; });
+    tokLabel.textContent = "";
+    sharedR.setAttribute("class", "f-grid fade");
+    light(new Set());
+    if (i === 2) { light(new Set([17]), "f-route"); hl.style.fill = "var(--route)"; hl.style.strokeOpacity = 1; }
+    if (i === 3) { wIdx = 3; sendToken(); }
+    if (i === 4) { sendToken(); startStream(); }
+    if (i === 5) { wIdx = 5; sendToken(); }
+    if (i === 6) { cells.forEach((c) => c.setAttribute("class", "f-act-soft fade")); sharedR.setAttribute("class", "f-act-soft fade"); }
+  },
+});
+
+/* try it */
+const ks = document.getElementById("k-stage");
+const ksv = svgRoot(ks, 760, 120, "Active versus total parameters");
+const totalBar = S("rect", { x: 20, y: 30, width: 700, height: 24, rx: 4, cls: "f-grid" }, ksv);
+const actBar = S("rect", { x: 20, y: 30, width: 0, height: 24, rx: 4, cls: "f-act" }, ksv);
+const TOTAL = 2.43 + 256 * 0.1258;
+S("text", { x: 20, y: 22, "font-size": 12, cls: "t-dim", text: `${TOTAL.toFixed(1)} B stored (language model, all 256 experts)` }, ksv);
+const actText = S("text", { x: 20, y: 80, "font-size": 15, "font-weight": 600, cls: "t-act", text: "" }, ksv);
+const mini = S("g", { transform: "translate(470,66)" }, ksv);
+const miniCells = Array.from({ length: 32 }, (_, e) => S("rect", { x: (e % 16) * 15, y: Math.floor(e / 16) * 15, width: 12, height: 12, rx: 2, cls: "f-grid" }, mini));
+let tries = 0;
+function drawK() {
+  const k = +document.getElementById("topk").value;
+  const active = 2.43 + k * 0.1258;
+  document.getElementById("topk-out").textContent = `k = ${k}`;
+  animAttrs(actBar, { width: (active / TOTAL) * 700 }, 300);
+  actText.textContent = `≈ ${active.toFixed(2)} B active per token (${((active / TOTAL) * 100).toFixed(1)}% of the weights)`;
+  const set = new Set(pick(tries + 1, k).map((e) => e % 32));
+  miniCells.forEach((c, e) => c.setAttribute("class", set.has(e) ? "f-act" : "f-grid"));
+}
+document.getElementById("topk").addEventListener("input", drawK);
+document.getElementById("send").addEventListener("click", () => { tries++; drawK(); });
+drawK();
+</script>
+</body>
+</html>

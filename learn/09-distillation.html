@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Distillation and Healing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Chapter 9</div>
+    <h1>Distillation and "healing"</h1>
+    <p class="lede">After pruning, the smaller model can be retrained to imitate the original. Done properly that needs a
+      GPU cluster. What fits on 16 GB is a local, layer-by-layer version, and in our runs it did not help.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="try9">
+    <h2 id="try9">Try it: hard labels versus the teacher's distribution</h2>
+    <div class="row">
+      <label for="q0">student p(␣is) <input id="q0" type="range" min="1" max="97" value="38"></label>
+      <label for="q1">student p(,) <input id="q1" type="range" min="1" max="97" value="22"></label>
+    </div>
+    <div class="row">
+      <span class="readout" id="kl-out"></span>
+      <span class="readout" id="ce-out"></span>
+    </div>
+    <div class="stage" id="kl-stage"></div>
+    <p class="note">Training on plain text only rewards the one token that appeared (cross-entropy with the hard label goes
+      to 0 when the student puts 100% on "␣is"). Distillation (KL to the teacher) is lowest when the student copies the
+      teacher's whole distribution, including "␣is" being only 62% likely and "," a real alternative. That extra
+      information is why distillation recovers a pruned model faster than plain training. Teacher numbers are illustrative.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p><b>Knowledge distillation</b>: the original model is the <b>teacher</b>, the pruned model the <b>student</b>. Both
+      read the same text; the student is trained to minimise the KL divergence between its next-token distribution and the
+      teacher's. It learns from every probability, not just from the one token that appeared.</p>
+    <p>Real distillation backpropagates through all 40 layers and keeps optimizer state for every parameter, about
+      16 bytes per parameter, so roughly 300 GB for a 19 B student. NVIDIA recommends 80 to 100 B tokens of it for this
+      level of compression.</p>
+    <p><code>06_heal.py</code> does what fits: one layer at a time, it trains only the router rows so that the pruned MoE
+      block reproduces the original block's output (mean squared error on hidden states). The local error went down,
+      but perplexity got slightly worse at both K=48 and K=128. Matching hidden states locally is a different goal
+      from predicting the next token well.</p>
+    <p><b>Then the real thing (step 3, <a href="f-training.html">appendix F</a>).</b> With the loss on the model's output and
+      its gradient streamed back through all 40 layers, one layer on the GPU at a time, the routers were trained for real:
+      the KL divergence to the teacher fell by 18%. But held-out perplexity improved only 0.6% (5.92 → 5.88) and the
+      benchmarks stayed within noise. Routers can only choose among the experts that survived; the knowledge in the deleted
+      ones needs trainable experts and far more data.</p>
+  </section>
+
+  <section class="facts" aria-label="In this project">
+    <div class="fact"><span class="k">K=128 heal (moe target)</span><span class="v">5.92 → 5.96</span><span class="n">slightly worse, undone</span></div>
+    <div class="fact"><span class="k">K=48 heal</span><span class="v">11.7 → 12.3 / 15.8</span><span class="n">target=moe / target=layer</span></div>
+    <div class="fact"><span class="k">Full KD budget</span><span class="v">80–100 B tokens</span><span class="n">NVIDIA Minitron guidance</span></div>
+    <div class="fact"><span class="k">Step 3, end-to-end</span><span class="v">KL −18%, ppl −0.6%</span><span class="n">benchmarks within noise (appendix F)</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">06_heal.py, 10_distill.py</span><span class="n">local healing, then real distillation</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const LAB = ["␣is", ",", ".", "␣has", "␣was", "other"];
+const TEACH = [0.62, 0.17, 0.04, 0.03, 0.02, 0.12];
+const STUD0 = [0.38, 0.22, 0.09, 0.06, 0.05, 0.2];
+const kl = (p, q) => p.reduce((a, pi, i) => a + (pi > 0 ? pi * Math.log(pi / q[i]) : 0), 0);
+
+const W = 960, HH = 480;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "Teacher and student distributions, KL training, and layer-wise healing");
+
+/* left: distributions */
+const D = { x: 24, y: 70, w: 430, h: 220 };
+const dist = S("g", {}, svg);
+S("text", { x: D.x, y: 34, "font-size": 14, "font-weight": 600, text: "next token after \"The capital of Australia\"" }, dist);
+const legendT = S("text", { x: D.x, y: 52, "font-size": 11, cls: "t-dim", text: "" }, dist);
+S("path", { d: `M${D.x},${D.y + D.h} H${D.x + D.w}`, cls: "wire" }, dist);
+const BW = D.w / LAB.length;
+const tb = [], sb = [], hb = [];
+LAB.forEach((l, k) => {
+  const x = D.x + k * BW + 10;
+  S("text", { x: x + 26, y: D.y + D.h + 18, "text-anchor": "middle", "font-size": 12, cls: "t-mono", text: l }, dist);
+  hb.push(S("rect", { x: x - 2, y: D.y, width: 56, height: D.h, rx: 4, fill: "none", stroke: "var(--act)", "stroke-width": 2, "stroke-dasharray": "5 3", cls: "fade hide" }, dist));
+  tb.push(S("rect", { x, y: D.y + D.h, width: 24, height: 0, rx: 3, cls: "f-teach fade" }, dist));
+  sb.push(S("rect", { x: x + 28, y: D.y + D.h, width: 24, height: 0, rx: 3, cls: "f-h fade" }, dist));
+});
+const hardT = S("text", { x: D.x + 10, y: D.y - 8, "font-size": 11, cls: "t-act fade hide", text: "hard label: the text said \"␣is\" (100%)" }, dist);
+const klText = S("text", { x: D.x, y: D.y + D.h + 50, "font-size": 15, "font-weight": 600, cls: "t-mono fade hide", text: "" }, dist);
+const KC = { x: D.x, y: D.y + D.h + 66, w: 300, h: 80 };
+const klAxis = S("path", { d: `M${KC.x},${KC.y} V${KC.y + KC.h} H${KC.x + KC.w}`, cls: "wire fade hide" }, dist);
+const klCurve = S("path", { d: "", fill: "none", stroke: "var(--h)", "stroke-width": 2.2, cls: "fade" }, dist);
+const klLab = S("text", { x: KC.x + KC.w + 8, y: KC.y + KC.h, "font-size": 11, cls: "t-dim fade hide", text: "training steps →" }, dist);
+function setDist(stud, showT = true, showS = true) {
+  const sc = (v) => v * D.h * 1.4;
+  tb.forEach((r, k) => animAttrs(r, { height: showT ? sc(TEACH[k]) : 0, y: D.y + D.h - (showT ? sc(TEACH[k]) : 0) }, 500));
+  sb.forEach((r, k) => { const h = showS ? sc(stud[k]) : 0; r.setAttribute("height", h); r.setAttribute("y", D.y + D.h - h); });
+}
+
+/* right: models */
+const R = { x: 500 };
+const right = S("g", { cls: "fade" }, svg);
+function stack(x, label, cls, n) {
+  const g = S("g", {}, right);
+  S("text", { x, y: 34, "font-size": 13, "font-weight": 600, text: label }, g);
+  const sl = [];
+  for (let l = 0; l < 40; l++) sl.push(S("rect", { x, y: 300 - l * 6.2, width: 120, height: 4.6, rx: 1.5, cls: cls + " fade" }, g));
+  S("text", { x, y: 324, "font-size": 11, cls: "t-dim", text: n }, g);
+  return { g, sl };
+}
+const teacher = stack(R.x, "teacher: original", "f-teach", "35 B params, 256 experts");
+const student = stack(R.x + 200, "student: pruned", "f-h", "19 B params, 128 experts");
+const grad = S("path", { d: `M${R.x + 340},60 V300`, stroke: "var(--cut)", "stroke-width": 3, fill: "none", "marker-end": "", cls: "fade hide" }, right);
+const gradT = S("g", { cls: "fade hide" }, right);
+["gradients", "flow back", "through all", "40 layers"].forEach((t, k) => S("text", { x: R.x + 350, y: 80 + k * 16, "font-size": 11.5, cls: "t-cut", text: t }, gradT));
+const cost = S("g", { cls: "fade hide" }, right);
+S("text", { x: R.x, y: 360, "font-size": 13, "font-weight": 600, text: "full distillation of a 19 B student" }, cost);
+[["weights + gradients (BF16)", "76 GB"], ["Adam state + master weights (FP32)", "228 GB"], ["tokens recommended", "80–100 B"]].forEach(([k, v], j) => {
+  S("text", { x: R.x, y: 384 + j * 22, "font-size": 12, cls: "t-dim", text: k }, cost);
+  S("text", { x: R.x + 300, y: 384 + j * 22, "font-size": 12.5, "font-weight": 600, cls: "t-mono t-cut", text: v }, cost);
+});
+S("text", { x: R.x, y: 456, "font-size": 12, text: "≈ 300 GB of GPU memory: a cluster, not a 16 GB card" }, cost);
+
+/* layer-wise healing view */
+const heal = S("g", { cls: "fade hide" }, svg);
+S("rect", { x: R.x - 10, y: 20, width: 450, height: 440, rx: 8, cls: "box" }, heal);
+S("text", { x: R.x + 6, y: 46, "font-size": 13.5, "font-weight": 600, text: "06_heal.py: one layer at a time" }, heal);
+const hx = R.x + 20;
+S("rect", { x: hx, y: 70, width: 150, height: 40, rx: 6, cls: "box-soft" }, heal);
+S("text", { x: hx + 75, y: 95, "text-anchor": "middle", "font-size": 12, text: "input u (layer i)" }, heal);
+S("path", { d: `M${hx + 75},110 V130 M${hx + 75},130 H${hx + 40} V150 M${hx + 75},130 H${hx + 260} V150`, cls: "wire" }, heal);
+S("rect", { x: hx - 10, y: 150, width: 120, height: 60, rx: 6, cls: "f-teach", opacity: 0.25 }, heal);
+S("text", { x: hx + 50, y: 176, "text-anchor": "middle", "font-size": 12, "font-weight": 600, text: "teacher MoE" }, heal);
+S("text", { x: hx + 50, y: 194, "text-anchor": "middle", "font-size": 10.5, cls: "t-dim", text: "256 experts" }, heal);
+S("rect", { x: hx + 200, y: 150, width: 120, height: 60, rx: 6, cls: "f-h-soft" }, heal);
+S("text", { x: hx + 260, y: 186, "text-anchor": "middle", "font-size": 12, "font-weight": 600, text: "student MoE" }, heal);
+S("text", { x: hx + 260, y: 202, "text-anchor": "middle", "font-size": 10.5, cls: "t-dim", text: "128 experts" }, heal);
+const routerHL = S("rect", { x: hx + 204, y: 153, width: 112, height: 14, rx: 3, cls: "f-route fade", opacity: 0.85 }, heal);
+S("text", { x: hx + 260, y: 164, "text-anchor": "middle", "font-size": 9.5, cls: "t-mono", fill: "var(--panel)", text: "router rows: trained" }, heal).style.fill = "var(--panel)";
+S("path", { d: `M${hx + 50},210 V240 H${hx + 140} M${hx + 260},210 V240 H${hx + 170}`, cls: "wire" }, heal);
+S("rect", { x: hx + 110, y: 232, width: 90, height: 30, rx: 6, cls: "f-cut-soft" }, heal);
+S("text", { x: hx + 155, y: 252, "text-anchor": "middle", "font-size": 12, cls: "t-cut", "font-weight": 600, text: "MSE" }, heal);
+const errT = S("text", { x: hx, y: 296, "font-size": 12.5, cls: "t-mono", text: "" }, heal);
+const driftG = S("g", { cls: "fade hide" }, heal);
+S("text", { x: hx, y: 326, "font-size": 12, text: "target=layer: also try to undo drift from earlier layers" }, driftG);
+S("text", { x: hx, y: 344, "font-size": 12, text: "target=moe: only copy the teacher MoE on the same input" }, driftG);
+const resG = S("g", { cls: "fade hide" }, heal);
+S("text", { x: hx, y: 330, "font-size": 12.5, "font-weight": 600, text: "measured perplexity" }, resG);
+const RES = [["K=128 pruned", 5.92, "f-h"], ["K=128 healed (moe)", 5.96, "f-cut"], ["K=48 pruned", 11.7, "f-h"], ["K=48 healed (moe)", 12.3, "f-cut"], ["K=48 healed (layer)", 15.8, "f-cut"]];
+const resBars = RES.map(([n, v, c], j) => {
+  const y = 342 + j * 22;
+  S("text", { x: hx, y: y + 13, "font-size": 11.5, cls: "t-dim", text: n }, resG);
+  const b = S("rect", { x: hx + 140, y: y + 2, width: 0, height: 14, rx: 2, cls: c }, resG);
+  S("text", { x: hx + 140 + v * 14 + 6, y: y + 14, "font-size": 11.5, cls: "t-mono", text: v.toFixed(2) }, resG);
+  return [b, v];
+});
+
+let trainStop = null;
+function train() {
+  let z = STUD0.map(Math.log); const hist = [kl(TEACH, STUD0)];
+  trainStop = tween(4500, (t) => {
+    const target = Math.floor(t * 60);
+    while (hist.length <= target) {
+      const q = softmax(z); z = z.map((zi, i) => zi - 0.9 * (q[i] - TEACH[i])); hist.push(kl(TEACH, softmax(z)));
+    }
+    const q = softmax(z); setDist(q);
+    klText.textContent = `KL(teacher ‖ student) = ${hist[hist.length - 1].toFixed(4)}`;
+    const mx = hist[0];
+    klCurve.setAttribute("d", hist.map((v, k) => `${k ? "L" : "M"}${KC.x + (k / 60) * KC.w},${KC.y + KC.h - (v / mx) * KC.h}`).join(" "));
+  });
+}
+const steps = [
+  { title: "Teacher and student read the same text", text: "The teacher is the original 35 B model, the student is the pruned 19 B one. Both predict the next token after \"The capital of Australia\". Grey bars: teacher, blue: student (illustrative numbers)." },
+  { title: "Plain training only knows the hard label", text: "Training on text tells the student one thing: the next token was \"␣is\". All other information is thrown away." },
+  { title: "The teacher knows much more", text: "\"␣is\" 62%, \",\" 17%, other continuations 12%. Matching the whole distribution teaches the student what the teacher considers plausible. The gap is measured by the KL divergence." },
+  { title: "Distillation pulls the student toward the teacher", text: "Each training step nudges the student's scores to shrink the KL divergence. Here 60 gradient steps on one example; real distillation does this for billions of tokens.", ms: 7000 },
+  { title: "Why that is expensive", text: "To change the student, gradients must flow back through all 40 layers, and the optimizer keeps extra state for every parameter: about 300 GB for a 19 B model, and 80–100 B tokens of training." },
+  { title: "What fits on 16 GB: one layer at a time", text: "06_heal.py streams teacher and student side by side. For each layer it feeds the same input to both MoE blocks and trains only the student's router rows to reduce the mean squared error between their outputs." },
+  { title: "Two targets", text: "target=layer also asks the MoE to undo the drift from earlier pruned layers; target=moe only asks it to copy the teacher's MoE on the same input. The local error went down in both cases." },
+  { title: "Result: it did not help", text: "Perplexity got slightly worse at K=128 and worse at K=48. A lower hidden-state error in each layer is not the same as better next-token predictions. Real recovery needs the KL loss through the whole model: step 3 did exactly that (appendix F), with an 18% lower KL but only a 0.6% better perplexity.", ms: 8000 },
+];
+
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    if (trainStop) { trainStop(); trainStop = null; }
+    show(right, i <= 4); show(heal, i >= 5);
+    show(grad, i === 4); show(gradT, i === 4); show(cost, i === 4);
+    hb.forEach((h, k) => show(h, (i === 1 || i === 2) && k === 0)); show(hardT, i === 1 || i === 2);
+    show(klText, i >= 2 && i <= 4); show(klAxis, i === 3); show(klLab, i === 3);
+    klCurve.setAttribute("d", "");
+    legendT.textContent = i === 1 ? "amber: the hard label (made-up numbers)" : "grey: teacher · blue: student (made-up numbers; chapter 1 has the real pruned model's)";
+    show(driftG, i === 6); show(resG, i === 7);
+    resBars.forEach(([b, v]) => animAttrs(b, { width: i === 7 ? v * 14 : 0 }, 900));
+    errT.textContent = i >= 5 ? (i === 5 ? "layer 0, K=128: MoE error 0.114 → 0.084" : "layer 24, K=128: MoE error 0.183 → 0.177") : "";
+    if (i === 0) setDist(STUD0);
+    if (i === 1) setDist(STUD0, false, true);
+    if (i === 2) { setDist(STUD0); klText.textContent = `KL(teacher ‖ student) = ${kl(TEACH, STUD0).toFixed(4)}`; }
+    if (i === 3) train();
+    if (i === 4) setDist(TEACH.map((v) => v * 0.98 + 0.0033));
+    if (i >= 5) setDist(STUD0);
+    student.sl.forEach((s, l) => (s.style.opacity = i === 4 ? 0.4 + 0.6 * (l / 40) : 1));
+  },
+});
+
+/* try it */
+const ks = document.getElementById("kl-stage");
+const ksv = svgRoot(ks, 760, 210, "Teacher and your student distribution");
+const KB = { x: 20, y: 12, w: 520, h: 160 };
+S("path", { d: `M${KB.x},${KB.y + KB.h} H${KB.x + KB.w}`, cls: "wire" }, ksv);
+const kbw = KB.w / LAB.length;
+const kt = [], ksb = [];
+LAB.forEach((l, k) => {
+  const x = KB.x + k * kbw + 10;
+  S("text", { x: x + 26, y: KB.y + KB.h + 18, "text-anchor": "middle", "font-size": 12, cls: "t-mono", text: l }, ksv);
+  const h = TEACH[k] * KB.h * 1.3;
+  kt.push(S("rect", { x, y: KB.y + KB.h - h, width: 24, height: h, rx: 3, cls: "f-teach" }, ksv));
+  ksb.push(S("rect", { x: x + 28, y: KB.y + KB.h, width: 24, height: 0, rx: 3, cls: "f-h" }, ksv));
+});
+S("rect", { x: 570, y: 30, width: 12, height: 12, rx: 3, cls: "f-teach" }, ksv); S("text", { x: 588, y: 41, "font-size": 12, cls: "t-dim", text: "teacher" }, ksv);
+S("rect", { x: 570, y: 54, width: 12, height: 12, rx: 3, cls: "f-h" }, ksv); S("text", { x: 588, y: 65, "font-size": 12, cls: "t-dim", text: "your student" }, ksv);
+function tryKL() {
+  let a = +document.getElementById("q0").value / 100, b = +document.getElementById("q1").value / 100;
+  if (a + b > 0.98) b = 0.98 - a;
+  const rest = Math.max(0.0001, 1 - a - b), r0 = STUD0.slice(2), rs = r0.reduce((x, y) => x + y, 0);
+  const q = [a, Math.max(b, 0.0001), ...r0.map((v) => (v / rs) * rest)];
+  ksb.forEach((r, k) => { const h = q[k] * KB.h * 1.3; r.setAttribute("height", h); r.setAttribute("y", KB.y + KB.h - h); });
+  document.getElementById("kl-out").textContent = `KL to teacher: ${kl(TEACH, q).toFixed(4)}`;
+  document.getElementById("ce-out").textContent = `hard-label loss −ln p(␣is): ${(-Math.log(q[0])).toFixed(3)}`;
+}
+["q0", "q1"].forEach((id) => document.getElementById(id).addEventListener("input", tryKL));
+tryKL();
+</script>
+</body>
+</html>

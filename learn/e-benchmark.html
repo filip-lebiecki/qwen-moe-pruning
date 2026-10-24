@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Benchmarking Pruned Models</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ex { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  .ex pre { margin: 0; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font: 400 0.78rem/1.5 var(--f-mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 22em; overflow-y: auto; }
+  .ex h3 { font-size: 1rem; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .badge { font: 600 0.72rem/1 var(--f-mono); padding: 4px 7px; border-radius: 999px; }
+  .badge.ok { background: var(--keep-soft); color: var(--keep); }
+  .badge.bad { background: var(--cut-soft); color: var(--cut); }
+  .ex .why { font-size: 0.85rem; color: var(--ink2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Appendix E · step 2</div>
+    <h1>Benchmarking: does the pruned model still do the job?</h1>
+    <p class="lede">Perplexity says how well a model predicts text. A benchmark says whether it can do a task: solve the
+      math problem, write code that passes the tests, pick the right answer. Here are three benchmarks, how each is graded,
+      how to read their uncertainty, and the results for the original model and both pruned models.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="tE">
+    <h2 id="tE">Try it: is a difference real or noise?</h2>
+    <div class="row">
+      <label for="na">questions <input id="na" type="range" min="5" max="500" value="15"></label>
+      <span class="readout" id="na-out"></span>
+    </div>
+    <div class="row">
+      <label for="pa">model A correct <input id="pa" type="range" min="0" max="100" value="80"></label>
+      <label for="pb">model B correct <input id="pb" type="range" min="0" max="100" value="67"></label>
+    </div>
+    <div class="stage" id="ci-stage"></div>
+    <p class="note">The bars are 95% Wilson confidence intervals: if you re-ran the benchmark on a fresh set of questions of
+      the same kind, the true score would fall inside the bar 95% of the time. Start at 15 questions with 12 vs 10 correct
+      (80% vs 67%), the graded test from run 3: the intervals overlap almost completely. Slide to 300 questions and the same
+      percentages become clearly different.</p>
+  </section>
+
+  <section class="ex" id="examples" aria-label="Real answers"></section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p><b>Grade automatically, and check the grader first.</b> <code>08_bench.py</code> extracts the final number (GSM8K),
+      runs the code against hidden tests (HumanEval), or reads the most likely letter (MMLU). Before trusting it, every
+      grader was run on the reference answers: 250/250, 164/164 and 300/300 must pass, and wrong answers must fail.</p>
+    <p><b>Graders fail too.</b> The first MMLU run scored 13.7%, below the 25% of random guessing. The model was fine; the
+      parser did not recognise "The correct option is **B**". The fix was to stop parsing free text and score the
+      probability of each letter instead, which also stops measuring how chatty a model is.</p>
+    <p><b>Report uncertainty.</b> 15 graded answers could not separate the two pruned models; 164–300 questions per task
+      can. Same decoding settings (greedy, thinking off) for every model, so differences come from the models.</p>
+  </section>
+
+  <section class="facts" aria-label="Facts">
+    <div class="fact"><span class="k">Questions per model</span><span class="v">714</span><span class="n">250 GSM8K + 164 HumanEval + 300 MMLU</span></div>
+    <div class="fact"><span class="k">Baseline</span><span class="v">unpruned, Q4_K_M</span><span class="n">unsloth GGUF, 20.5 GiB, partly in RAM</span></div>
+    <div class="fact"><span class="k">Decoding</span><span class="v">greedy, no thinking</span><span class="n">reproducible; thinking would score higher</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">08_bench.py</span><span class="n">run_bench.sh, bench_report.py</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script src="e-benchmark-data.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+function wilson(k, n) {
+  if (!n) return [0, 0];
+  const p = k / n, z = 1.96, d = 1 + z * z / n, c = (p + z * z / (2 * n)) / d;
+  const h = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d;
+  return [100 * (c - h), 100 * (c + h)];
+}
+const COL = { "original-q4": "var(--teach)", "general-k128": "var(--h)", "distill-k128": "var(--keep)", "code-k48": "var(--act)" };
+const TASKNAME = { gsm8k: "GSM8K · math word problems", humaneval: "HumanEval · write a Python function", mmlu: "MMLU · knowledge, 57 subjects" };
+
+const W = 960, HH = 470;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "Benchmark grading and results");
+
+/* ---- step 0: three tasks ---- */
+const tasksG = S("g", { cls: "fade" }, svg);
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "three benchmarks, three kinds of skill" }, tasksG);
+const CARDS = [
+  ["GSM8K", "250 math word problems", "Janet's ducks lay 16 eggs per day. She eats three for breakfast and bakes muffins with four. She sells the rest at $2 each. How much does she make?", "check: the final number (18)"],
+  ["HumanEval", "164 Python functions", "def how_many_times(string, substring):\n    \"\"\"Find how many times a substring\n    can be found, overlapping too.\"\"\"", "check: hidden unit tests pass"],
+  ["MMLU", "300 questions, 57 subjects", "Which planet is closest to the Sun?\nA. Venus  B. Mercury\nC. Earth  D. Mars", "check: the right letter"],
+];
+CARDS.forEach(([name, sub, q, check], k) => {
+  const x = 24 + k * 312;
+  S("rect", { x, y: 56, width: 296, height: 300, rx: 8, cls: "box" }, tasksG);
+  S("text", { x: x + 16, y: 84, "font-size": 16, "font-weight": 700, text: name }, tasksG);
+  S("text", { x: x + 16, y: 104, "font-size": 12, cls: "t-dim", text: sub }, tasksG);
+  const lines = q.split("\n").flatMap((l) => l.length > 40 ? l.match(/.{1,40}(\s|$)/g) : [l]);
+  lines.forEach((l, j) => S("text", { x: x + 16, y: 136 + j * 19, "font-size": 12, cls: "t-mono", text: l }, tasksG));
+  S("text", { x: x + 16, y: 336, "font-size": 12.5, "font-weight": 600, cls: "t-keep", text: check }, tasksG);
+});
+S("text", { x: 24, y: 390, "font-size": 12.5, cls: "t-dim", text: "Perplexity (chapter 8) measures predicting text; these measure finishing a task. A model can be fluent and still wrong." }, tasksG);
+
+/* ---- steps 1-3: grading pipelines ---- */
+const pipeG = S("g", { cls: "fade hide" }, svg);
+const pipeTitle = S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "" }, pipeG);
+const PB = [0, 1, 2, 3].map((k) => {
+  const x = 24 + k * 234;
+  const r = S("rect", { x, y: 70, width: 214, height: 150, rx: 8, cls: "box" }, pipeG);
+  const t = S("text", { x: x + 14, y: 94, "font-size": 13, "font-weight": 600, text: "" }, pipeG);
+  const body = [0, 1, 2, 3, 4].map((j) => S("text", { x: x + 14, y: 120 + j * 19, "font-size": 11.5, cls: "t-mono", text: "" }, pipeG));
+  if (k < 3) S("path", { d: `M${x + 214},145 H${x + 234}`, cls: "wire-act" }, pipeG);
+  return { r, t, body };
+});
+const pipeNote = [0, 1, 2].map((k) => S("text", { x: 24, y: 260 + k * 24, "font-size": 13, cls: k ? "t-dim" : "", text: "" }, pipeG));
+const probG = S("g", { cls: "fade hide" }, svg);
+const PROBS = [["B", 0.971], ["Mer", 0.029], ["A", 0.0], ["C", 0.0], ["D", 0.0]];
+const probBars = PROBS.map(([t, p], k) => {
+  const y = 340 + k * 22;
+  S("text", { x: 500, y: y + 13, "font-size": 12, cls: "t-mono", text: t }, probG);
+  const b = S("rect", { x: 540, y: y + 2, width: 0, height: 14, rx: 2, cls: t === "B" ? "f-keep" : "f-ink3" }, probG);
+  S("text", { x: 540 + p * 300 + 6, y: y + 13, "font-size": 11, cls: "t-mono t-dim", text: p.toFixed(3) }, probG);
+  return [b, p];
+});
+S("text", { x: 500, y: 330, "font-size": 12, cls: "t-dim", text: "real next-token probabilities (19 B general model)" }, probG);
+function pipeline(title, boxes, notes) {
+  pipeTitle.textContent = title;
+  PB.forEach((b, k) => { b.t.textContent = boxes[k][0]; b.body.forEach((t, j) => (t.textContent = boxes[k][1][j] || "")); b.r.style.stroke = boxes[k][2] ? `var(--${boxes[k][2]})` : ""; });
+  pipeNote.forEach((t, k) => (t.textContent = notes[k] || ""));
+}
+
+/* ---- step 4: confidence intervals ---- */
+const ciG = S("g", { cls: "fade hide" }, svg);
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "the same gap, two sample sizes (95% confidence intervals)" }, ciG);
+function ciRow(y, label, k, n, col) {
+  const [lo, hi] = wilson(k, n), X = (v) => 260 + v * 6.4;
+  S("text", { x: 24, y: y + 4, "font-size": 12.5, text: label }, ciG);
+  S("line", { x1: X(lo), x2: X(hi), y1: y, y2: y, stroke: col, "stroke-width": 8, "stroke-linecap": "round", "stroke-opacity": 0.45 }, ciG);
+  S("circle", { cx: X(100 * k / n), cy: y, r: 6, fill: col }, ciG);
+  S("text", { x: X(hi) + 12, y: y + 4, "font-size": 11.5, cls: "t-mono t-dim", text: `${(100 * k / n).toFixed(0)}% (${lo.toFixed(0)}–${hi.toFixed(0)})` }, ciG);
+}
+ciRow(100, "12 of 15 (code model, run 3)", 12, 15, "var(--act)");
+ciRow(130, "10 of 15 (general model, run 3)", 10, 15, "var(--h)");
+ciRow(220, "240 of 300 (same 80%)", 240, 300, "var(--act)");
+ciRow(250, "200 of 300 (same 67%)", 200, 300, "var(--h)");
+[0, 25, 50, 75, 100].forEach((v) => { S("line", { x1: 260 + v * 6.4, x2: 260 + v * 6.4, y1: 80, y2: 270, stroke: "var(--grid)" }, ciG); S("text", { x: 260 + v * 6.4, y: 290, "text-anchor": "middle", "font-size": 10.5, cls: "t-faint t-mono", text: v + "%" }, ciG); });
+S("text", { x: 24, y: 330, "font-size": 13, text: "With 15 questions the two intervals overlap: the test cannot tell the models apart." }, ciG);
+S("text", { x: 24, y: 354, "font-size": 13, cls: "t-dim", text: "With 300, the same 80% vs 67% is a clear difference. That is why step 2 uses 164–300 questions per task." }, ciG);
+
+/* ---- step 5: results ---- */
+const resG = S("g", { cls: "fade hide" }, svg);
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "results: % correct with 95% confidence intervals" }, resG);
+const RX = (v) => 300 + v * 6.0;
+const resRows = [];
+BENCH.tasks.forEach((task, ti) => {
+  const y0 = 66 + ti * 134, rowH = Math.min(30, 100 / BENCH.tags.length);
+  S("text", { x: 24, y: y0, "font-size": 13, "font-weight": 600, text: TASKNAME[task] }, resG);
+  BENCH.tags.forEach((tag, mi) => {
+    const s = BENCH.scores[`${tag}|${task}`];
+    const y = y0 + 22 + mi * rowH;
+    S("text", { x: 40, y: y + 5, "font-size": 12, cls: "t-dim", text: BENCH.names[tag] }, resG);
+    if (!s) { S("text", { x: RX(0), y: y + 5, "font-size": 12, cls: "t-faint", text: "not run" }, resG); return; }
+    const bar = S("rect", { x: RX(0), y: y - 7, width: 0, height: 14, rx: 3 }, resG); bar.style.fill = COL[tag]; bar.style.fillOpacity = 0.85;
+    const ci = S("line", { x1: RX(s.ci95[0]), x2: RX(s.ci95[1]), y1: y, y2: y, stroke: "var(--ink)", "stroke-width": 1.6 }, resG);
+    S("text", { x: RX(Math.max(s.score, s.ci95[1])) + 10, y: y + 5, "font-size": 12, "font-weight": 600, cls: "t-mono", text: `${s.score.toFixed(1)}%` }, resG);
+    resRows.push([bar, s.score, ci]);
+  });
+});
+[0, 25, 50, 75, 100].forEach((v) => S("text", { x: RX(v), y: 456, "text-anchor": "middle", "font-size": 10.5, cls: "t-faint t-mono", text: v + "%" }, resG));
+
+const steps = [
+  { title: "Why benchmarks, after perplexity", text: "Three standard benchmarks test three different skills: arithmetic reasoning, writing working code, and broad knowledge. Each is graded automatically, so no judgement is involved." },
+  { title: "GSM8K: is the final number right?", text: "The model solves the problem in text and ends with '#### <number>'. The grader takes that number (or the last number in the answer) and compares it with the reference. Answers that ramble past 2,048 tokens count as wrong." },
+  { title: "HumanEval: does the code pass the tests?", text: "The model completes a function. The grader builds a program: the original prompt (for imports and helpers), the model's function, the hidden tests, and runs it in a separate Python process with a 10-second limit." },
+  { title: "MMLU: which letter is most likely?", text: "Instead of parsing a free-text answer, the answer is started as \"The correct option is **\" and the model's probability for each letter is read. The most likely letter is its pick. This measures knowledge, not chattiness." },
+  { title: "Is the difference real? Confidence intervals", text: "A score from a few questions is noisy. The 95% interval shows the range the true score plausibly lies in. Run 3's 12/15 vs 10/15 overlapped almost completely; at 300 questions the same percentages separate." },
+  { title: "Results", text: "Three models, 714 questions each, the same settings. The bars show the score, the black lines the 95% interval. Where the lines of two models overlap a lot, treat them as tied.", ms: 9000 },
+];
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    show(tasksG, i === 0); show(pipeG, i >= 1 && i <= 3); show(probG, i === 3); show(ciG, i === 4); show(resG, i === 5);
+    probBars.forEach(([b, p]) => animAttrs(b, { width: i === 3 ? p * 300 : 0 }, 700));
+    resRows.forEach(([b, v]) => animAttrs(b, { width: i === 5 ? v * 6.0 : 0 }, 900));
+    if (i === 1) pipeline("GSM8K grading (gsm8k_grade)", [
+      ["question", ["Janet's ducks lay 16", "eggs per day…", "How much does she", "make every day?"]],
+      ["model answer", ["Step 1: 16 eggs", "Step 2: 3 eaten", "…", "#### 18"], "act"],
+      ["extract", ["regex '#### <number>'", "else: last number", "→ 18"]],
+      ["compare", ["reference: 18", "18 == 18", "→ correct"], "keep"],
+    ], ["Real: the 8.9 B code model got this one right, while writing \"Egats for breakfast\" on the way.", "Typos inside otherwise correct reasoning are a typical sign of pruning damage."]);
+    if (i === 2) pipeline("HumanEval grading (humaneval_grade)", [
+      ["prompt", ["def how_many_times(", "  string, substring):", "  \"\"\"docstring\"\"\"", "  (HumanEval/18)"]],
+      ["model's function", ["for i in range(", " len(string) -", " len(subsubstring)+1):", "  …"], "act"],
+      ["program", ["prompt + function", "+ hidden tests", "+ check(entry)", "python -I, 10 s"]],
+      ["result", ["NameError:", "'subsubstring' is", "not defined", "→ fail"], "cut"],
+    ], ["Real: the code model's logic was right, but it misspelled its own variable. The tests catch it; reading the code might not.", "A grader that runs the code is strict and objective; it also means running model-written code (fine locally, not a sandbox)."]);
+    if (i === 3) pipeline("MMLU scoring (mmlu_answer)", [
+      ["question", ["Which planet is", "closest to the Sun?", "A. Venus  B. Mercury", "C. Earth  D. Mars"]],
+      ["forced start", ["…assistant", "\"The correct", " option is **\""], "act"],
+      ["1 next token", ["read probabilities", "of A, B, C, D", "(top 20 tokens)"]],
+      ["pick", ["most likely: B", "reference: B", "→ correct"], "keep"],
+    ], ["The first version parsed free text and scored 13.7%, below chance: the model wrote \"The correct option is **B**\",", "which the parser missed. A grader can be wrong; validate it on reference answers and look at failures."]);
+  },
+});
+
+/* examples from the real answer files */
+const exBox = document.getElementById("examples");
+const EX = BENCH.examples.humaneval_18;
+BENCH.tags.forEach((tag) => {
+  const e = EX[tag]; if (!e) return;
+  const d = H("div", {}, exBox);
+  H("h3", { html: `HumanEval/18 · ${BENCH.names[tag]} <span class="badge ${e.ok ? "ok" : "bad"}">${e.ok ? "pass" : "fail"}</span>` }, d);
+  H("pre", { text: e.answer }, d);
+  if (!e.ok) H("span", { cls: "why", text: e.detail }, d);
+});
+
+/* try it */
+const cs = svgRoot(document.getElementById("ci-stage"), 760, 130, "Confidence intervals for two models");
+const CX = (v) => 120 + v * 6.0;
+[0, 25, 50, 75, 100].forEach((v) => { S("line", { x1: CX(v), x2: CX(v), y1: 10, y2: 96, stroke: "var(--grid)" }, cs); S("text", { x: CX(v), y: 116, "text-anchor": "middle", "font-size": 10.5, cls: "t-faint t-mono", text: v + "%" }, cs); });
+const rowsCI = [["model A", "var(--act)", 36], ["model B", "var(--h)", 72]].map(([lab, col, y]) => {
+  S("text", { x: 10, y: y + 4, "font-size": 12.5, text: lab }, cs);
+  return { line: S("line", { y1: y, y2: y, stroke: col, "stroke-width": 9, "stroke-linecap": "round", "stroke-opacity": 0.45 }, cs), dot: S("circle", { cy: y, r: 6, fill: col }, cs) };
+});
+function tryCI() {
+  const n = +document.getElementById("na").value, pa = +document.getElementById("pa").value, pb = +document.getElementById("pb").value;
+  const ka = Math.round(pa / 100 * n), kb = Math.round(pb / 100 * n);
+  const ia = wilson(ka, n), ib = wilson(kb, n);
+  [[rowsCI[0], ia, ka], [rowsCI[1], ib, kb]].forEach(([r, [lo, hi], k]) => { r.line.setAttribute("x1", CX(lo)); r.line.setAttribute("x2", CX(hi)); r.dot.setAttribute("cx", CX(100 * k / n)); });
+  const sep = ia[0] > ib[1] || ib[0] > ia[1];
+  document.getElementById("na-out").textContent = `${ka}/${n} vs ${kb}/${n}: ${sep ? "intervals do not overlap, a real difference" : "intervals overlap, could be noise"}`;
+}
+["na", "pa", "pb"].forEach((id) => document.getElementById(id).addEventListener("input", tryCI));
+tryCI();
+</script>
+</body>
+</html>

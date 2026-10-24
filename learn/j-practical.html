@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hugging Face to GPU</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+<style>
+  .tryit select, .tryit label { max-width: 100%; }
+  .cmdout { font: 0.86rem/1.5 var(--f-mono); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Appendix J · step 6</div>
+    <h1>From Hugging Face to your GPU</h1>
+    <p class="lede">The reusable workflow: download a model, convert and quantize it, check it, run it well, including a
+      model bigger than the GPU, and publish it. Measured on Qwen3.5-2B (the whole conversion in under 4 minutes) and on the
+      unpruned 35 B at Q4_K_M, a 20.5 GiB file on a 16 GB card.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="tJ">
+    <h2 id="tJ">Try it: build the command for your setup</h2>
+    <div class="row">
+      <label for="mf">model <select id="mf" class="btn"></select></label>
+      <label for="cx">context <select id="cx" class="btn"><option>8192</option><option selected>32768</option><option>131072</option><option>262144</option></select></label>
+      <label for="kv">KV cache <select id="kv" class="btn"><option value="f16">f16</option><option value="q8_0">q8_0</option></select></label>
+    </div>
+    <div class="row">
+      <label for="ncm">experts of the first N layers in RAM <input id="ncm" type="range" min="0" max="40" step="1" value="0"></label>
+      <label for="th"><input id="th" type="checkbox" checked> thinking</label>
+      <span class="readout" id="j-out"></span>
+    </div>
+    <div class="stage" id="jbar"></div>
+    <div class="cmdout" id="cmd"></div>
+    <p class="note">GPU memory = weights on the GPU (measured) + KV cache (20 KiB per token in f16, 10.6 KiB in q8_0) +
+      about 0.4 GiB of buffers; about 14.6 GiB were free on this card with the desktop running (it varies with
+      what else uses the GPU: the measured N = 12 run, at 8k context, was right at the limit). Speeds are the measured ones
+      (step 4 and the offload sweep), interpolated between the measured N. The N slider only matters for the 35 B Q4_K_M,
+      the one file here that does not fit.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p><b>Download what you need.</b> <code>hf download REPO FILE --local-dir DIR</code> for one file of a GGUF repo;
+      <code>hf models info</code> and the repo page show what is there. A token (<code>hf auth login</code>) is needed for
+      gated models and uploads.</p>
+    <p><b>Convert, quantize, then check.</b> <code>scripts/make_gguf.sh REPO TYPES…</code> does download → BF16 GGUF →
+      imatrix → quantize → perplexity of every file. Small models pay more for each bit: the 2 B lost 3.7% at Q4_K_M where the
+      19 B MoE lost nothing measurable. Very low-bit types need imatrix data for every tensor, which an unused MTP head never
+      gets.</p>
+    <p><b>Fit first, then offload.</b> If a good quantization fits in VRAM, use it: the 35 B at 12 GiB ran at 173 tokens per
+      second. A MoE that does not fit can keep its experts in system RAM with <code>--n-cpu-moe N</code>: 78 tokens per
+      second with 12 layers' experts in RAM, still 33 with all of them there and under 3 GB of VRAM used.</p>
+  </section>
+
+  <section class="facts" aria-label="Facts">
+    <div class="fact"><span class="k">2 B, all steps</span><span class="v">3 min 54 s</span><span class="n">download, convert, imatrix, 4 types</span></div>
+    <div class="fact"><span class="k">35 B Q4_K_M offloaded</span><span class="v">78 tok/s</span><span class="n">--n-cpu-moe 12, 14.6 GiB on GPU</span></div>
+    <div class="fact"><span class="k">All experts in RAM</span><span class="v">33 tok/s</span><span class="n">1.9 GiB of weights on the GPU</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">make_gguf.sh</span><span class="n">offload_sweep.sh, model_card.py, upload_gguf.sh</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script src="j-practical-data.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const MK = PR.make, OFF = PR.offload;
+const W = 960, HH = 460;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "From Hugging Face to your GPU");
+const G = Array.from({ length: 7 }, () => S("g", { cls: "fade hide" }, svg));
+const title = (g, t) => S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: t }, g);
+const nOf = (s) => (s === "cpumoe" ? 40 : s === "fit" ? null : +s.replace("ncmoe", ""));
+
+/* 0: the journey */
+const g0 = G[0];
+title(g0, "the journey of one model (Qwen3.5-2B, measured)");
+const bf = MK.find((r) => r.type === "BF16");
+const stages = [
+  ["Hugging Face", "safetensors", "4.5 GB", "hf download"],
+  ["GGUF BF16", "+ vision mmproj", `${bf ? bf.gib.toFixed(1) : "3.6"} GiB`, "convert_hf_to_gguf"],
+  ["imatrix", "200 x 512 tokens", "3.9 MB", "llama-imatrix"],
+  ["quantized", MK.filter((r) => r.type !== "BF16").map((r) => r.type).join(", "), `${Math.min(...MK.map((r) => r.gib)).toFixed(2)}–${Math.max(...MK.filter((r) => r.type !== "BF16").map((r) => r.gib)).toFixed(2)} GiB`, "llama-quantize"],
+  ["checked", "perplexity per file", "wikitext-2", "llama-perplexity"],
+  ["served", "web chat + API", "localhost:8080", "llama-server"],
+  ["published", "model card + files", "private repo", "hf upload"],
+];
+const sx = (k) => 40 + k * 130;
+const stBoxes = stages.map(([n, sub, size, cmd], k) => {
+  const g = S("g", { cls: "fade" }, g0);
+  S("rect", { x: sx(k), y: 120, width: 116, height: 96, rx: 8, cls: "box" }, g);
+  S("text", { x: sx(k) + 10, y: 144, "font-size": 13, "font-weight": 600, text: n }, g);
+  S("text", { x: sx(k) + 10, y: 164, "font-size": 10.5, cls: "t-dim", text: sub.length > 19 ? sub.slice(0, 18) + "…" : sub }, g);
+  S("text", { x: sx(k) + 10, y: 186, "font-size": 11, cls: "t-mono t-h", text: size }, g);
+  S("text", { x: sx(k) + 58, y: 244, "text-anchor": "middle", "font-size": 10.5, cls: "t-mono t-act", text: cmd }, g);
+  if (k) S("path", { d: `M${sx(k) - 12},168 l8,0`, stroke: "var(--ink3)", "stroke-width": 2 }, g);
+  return g;
+});
+S("text", { x: 40, y: 300, "font-size": 12.5, text: "scripts/make_gguf.sh Qwen/Qwen3.5-2B Q8_0 Q4_K_M IQ4_XS IQ3_XXS   runs the first five boxes: 3 min 54 s." }, g0);
+S("text", { x: 40, y: 324, "font-size": 12.5, cls: "t-dim", text: "Serving and publishing are separate: llama-server for running it, model_card.py + upload_gguf.sh for sharing it." }, g0);
+
+/* 1: inside an HF repo */
+const g1 = G[1];
+title(g1, "what is inside a Hugging Face model repo (Qwen/Qwen3.5-2B, real sizes)");
+const files = [["model.safetensors-00001-of-00001.safetensors", 4548221488, "the weights (BF16)"], ["tokenizer.json", 12807982, "the tokenizer"], ["vocab.json + merges.txt", 10075980, "the tokenizer's vocabulary and merge rules"], ["model.safetensors.index.json", 64460, "which tensor is in which shard"], ["README.md", 62814, "the model card"], ["tokenizer_config.json", 16709, "special tokens"], ["LICENSE", 11544, "Apache 2.0"], ["chat_template.jinja", 7755, "how a chat becomes text (chapter 16)"], ["config.json", 2908, "the architecture: layers, sizes, layer types"]];
+files.forEach(([n, b, d], k) => {
+  const y = 64 + k * 40, w = Math.max(3, (Math.log10(b) - 3) / 7 * 240);
+  S("rect", { x: 330, y, width: w, height: 24, rx: 3, cls: k === 0 ? "f-h" : "f-keep", "fill-opacity": 0.8 }, g1);
+  S("text", { x: 320, y: y + 16, "text-anchor": "end", "font-size": 11.5, cls: "t-mono", text: n.length > 38 ? n.slice(0, 37) + "…" : n }, g1);
+  S("text", { x: 336 + w, y: y + 16, "font-size": 11, cls: "t-mono t-dim", text: b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${(b / 1e3).toFixed(1)} KB` }, g1);
+  S("text", { x: 650, y: y + 16, "font-size": 11.5, cls: "t-dim", text: d }, g1);
+});
+S("text", { x: 330, y: 440, "font-size": 11, cls: "t-faint", text: "bar length: log scale (the weights are 1.5 million times bigger than config.json)" }, g1);
+
+/* 2: inside a GGUF */
+const g2 = G[2];
+title(g2, "inside a GGUF: settings first, then the tensors (gguf-dump --no-tensors, the 2 B Q4_K_M)");
+const kvs = [["general.architecture", "'qwen35'"], ["general.license", "'apache-2.0'"], ["general.base_model.0.repo_url", "'…/Qwen/Qwen3.5-2B-Base'"], ["qwen35.block_count", "25  (24 layers + the MTP block)"], ["qwen35.context_length", "262144"], ["qwen35.attention.head_count_kv", "2"], ["qwen35.full_attention_interval", "4"], ["qwen35.nextn_predict_layers", "1  (the MTP head)"], ["tokenizer.chat_template", "'{%- set image_count …'"], ["tokenizer.ggml.eos_token_id", "248046"]];
+kvs.forEach(([k, v], j) => { S("text", { x: 60, y: 76 + j * 28, "font-size": 12.5, cls: "t-mono t-route", text: k }, g2); S("text", { x: 420, y: 76 + j * 28, "font-size": 12.5, cls: "t-mono", text: `= ${v}` }, g2); });
+S("text", { x: 60, y: 380, "font-size": 12.5, cls: "t-dim", text: "One file holds everything llama.cpp needs: settings, tokenizer, chat template, then 335 tensors, each with its own type" }, g2);
+S("text", { x: 60, y: 402, "font-size": 12.5, cls: "t-dim", text: "(a Q4_K_M file mixes Q4_K, Q6_K, Q8_0 and F32 tensors). The vision part lives in a separate mmproj file." }, g2);
+
+/* 3: what each type costs on the 2 B */
+const g3 = G[3];
+title(g3, "Qwen3.5-2B: file size and perplexity of each type (wikitext-2 test; lower is better)");
+const bfp = bf ? bf.ppl : 10.64;
+MK.forEach((r, k) => {
+  const y = 70 + k * 56;
+  S("text", { x: 150, y: y + 16, "text-anchor": "end", "font-size": 13, cls: "t-mono", text: r.type }, g3);
+  S("rect", { x: 160, y: y + 2, width: (r.gib / 4) * 300, height: 20, rx: 3, cls: "f-ink3" }, g3);
+  S("text", { x: 166 + (r.gib / 4) * 300, y: y + 16, "font-size": 11.5, cls: "t-mono", text: `${r.gib.toFixed(2)} GiB` }, g3);
+  if (r.ppl != null) {
+    const d = (r.ppl / bfp - 1) * 100;
+    S("rect", { x: 560, y: y + 2, width: Math.max(2, d * 13), height: 20, rx: 3, fill: d < 1 ? "var(--keep)" : d < 6 ? "var(--act)" : "var(--cut)" }, g3);
+    S("text", { x: 566 + Math.max(2, d * 13), y: y + 16, "font-size": 11.5, cls: "t-mono", text: `${r.ppl.toFixed(2)} (${d >= 0 ? "+" : ""}${d.toFixed(1)}%)` }, g3);
+  }
+});
+S("text", { x: 160, y: 60, "font-size": 11.5, cls: "t-dim", text: "size" }, g3);
+S("text", { x: 560, y: 60, "font-size": 11.5, cls: "t-dim", text: "perplexity, change against BF16" }, g3);
+S("text", { x: 60, y: 380, "font-size": 12.5, cls: "t-dim", text: "Compare step 4: the 19 B MoE lost nothing measurable at Q4_K_M and still little at Q3_K_M. A small model has fewer" }, g3);
+S("text", { x: 60, y: 402, "font-size": 12.5, cls: "t-dim", text: "redundant weights to absorb the rounding: Q8_0 is free, 4 bits cost 4–5%, 3 bits 17%." }, g3);
+
+/* 4: the MTP gotcha */
+const g4 = G[4];
+title(g4, "why IQ3_XXS first failed: the MTP block never runs, so the imatrix has no data for it");
+for (let l = 0; l < 25; l++) {
+  const mtp = l === 24, x = 40 + l * 35;
+  S("rect", { x, y: 90, width: 28, height: 80, rx: 4, fill: mtp ? "var(--cut)" : "var(--keep)", "fill-opacity": mtp ? 0.9 : 0.6 }, g4);
+  if (l % 4 === 0 || mtp) S("text", { x: x + 14, y: 84, "text-anchor": "middle", "font-size": 10, cls: "t-faint t-mono", text: mtp ? "24" : l }, g4);
+}
+S("text", { x: 40, y: 196, "font-size": 12, cls: "t-keep", text: "layers 0–23: run on every token; llama-imatrix records their input statistics" }, g4);
+S("text", { x: 880, y: 196, "text-anchor": "end", "font-size": 12, cls: "t-cut", text: "block 24: the MTP head" }, g4);
+["llama_model_quantize: failed to quantize: Missing importance matrix for tensor", "blk.24.attn_k.weight in a very low-bit quantization"].forEach((t, k) => S("text", { x: 40, y: 250 + k * 20, "font-size": 12.5, cls: "t-mono t-cut", text: t }, g4));
+S("text", { x: 40, y: 310, "font-size": 12.5, text: "The MTP head predicts a token further ahead, for speculative decoding (llama-server --spec-type draft-mtp)." }, g4);
+S("text", { x: 40, y: 334, "font-size": 12.5, text: "Fix: keep it, but store that block at Q8_0, which needs no imatrix:  --tensor-type \"blk\\.24\\.=q8_0\"" }, g4);
+S("text", { x: 40, y: 358, "font-size": 12.5, cls: "t-dim", text: "And the crash left a half-written IQ3_XXS file behind; the script now writes .part files and renames them on success." }, g4);
+
+/* 5: too big for the GPU */
+const g5 = G[5];
+title(g5, "the 35 B at Q4_K_M (20.5 GiB) on a 16 GB card: experts of the first N layers stay in system RAM");
+S("rect", { x: 40, y: 64, width: 420, height: 300, rx: 10, cls: "box" }, g5);
+S("rect", { x: 500, y: 64, width: 420, height: 300, rx: 10, cls: "box" }, g5);
+S("text", { x: 250, y: 86, "text-anchor": "middle", "font-size": 13, "font-weight": 600, text: "GPU, 16 GB" }, g5);
+S("text", { x: 710, y: 86, "text-anchor": "middle", "font-size": 13, "font-weight": 600, text: "system RAM, 32 GB" }, g5);
+const lay = Array.from({ length: 40 }, (_, l) => {
+  const col = l % 10, row = Math.floor(l / 10);
+  const base = S("rect", { x: 60 + col * 39, y: 104 + row * 62, width: 34, height: 14, rx: 2, cls: "f-h", "fill-opacity": 0.8 }, g5);
+  const ex = S("rect", { x: 60 + col * 39, y: 120 + row * 62, width: 34, height: 34, rx: 3, cls: "f-act", "fill-opacity": 0.85 }, g5);
+  return { ex, col, row };
+});
+S("text", { x: 60, y: 384, "font-size": 11.5, cls: "t-dim", text: "blue: attention / DeltaNet / router / shared expert (always on the GPU)   amber: the layer's 256 experts" }, g5);
+const n5 = S("text", { x: 500, y: 410, "font-size": 15, "font-weight": 700, cls: "t-mono", text: "" }, g5);
+const s5 = S("text", { x: 500, y: 432, "font-size": 12.5, cls: "t-dim", text: "" }, g5);
+function placeN(N) {
+  lay.forEach((L, l) => {
+    const inRam = l < N;
+    animAttrs(L.ex, { x: inRam ? 520 + L.col * 39 : 60 + L.col * 39, y: inRam ? 104 + L.row * 62 : 120 + L.row * 62 }, 700);
+  });
+  const r = OFF.find((o) => nOf(o.setting) === N);
+  n5.textContent = `--n-cpu-moe ${N}`;
+  s5.textContent = r ? `${(r.gpu_weights_mib / 1024).toFixed(1)} GiB of weights on the GPU · ${r.speed.gen_tok_s.toFixed(0)} tokens per second (measured)` : "";
+}
+let offTimer = null;
+function playOff(i) {
+  clearInterval(offTimer);
+  if (i !== 5) return;
+  const Ns = OFF.map((o) => nOf(o.setting)).filter((n) => n != null).sort((a, b) => a - b);
+  let k = 0; placeN(Ns[0]);
+  if (!REDUCED) offTimer = setInterval(() => { k = (k + 1) % Ns.length; placeN(Ns[k]); }, 2200);
+}
+
+/* 6: speed against N */
+const g6 = G[6];
+title(g6, "generation speed: how many layers' experts live in RAM, against models that fit entirely");
+const P6 = { x: 80, y: 60, w: 560, h: 300 }, X6 = (n) => P6.x + (n / 40) * P6.w, Y6 = (v) => P6.y + P6.h - (v / 220) * P6.h;
+[0, 50, 100, 150, 200].forEach((t) => { S("line", { x1: P6.x, x2: P6.x + P6.w, y1: Y6(t), y2: Y6(t), stroke: "var(--grid)" }, g6); S("text", { x: P6.x - 8, y: Y6(t) + 4, "text-anchor": "end", "font-size": 10.5, cls: "t-faint t-mono", text: t }, g6); });
+[0, 10, 20, 30, 40].forEach((t) => S("text", { x: X6(t), y: P6.y + P6.h + 16, "text-anchor": "middle", "font-size": 10.5, cls: "t-faint t-mono", text: t }, g6));
+S("text", { x: P6.x + P6.w, y: P6.y + P6.h + 34, "text-anchor": "end", "font-size": 11.5, cls: "t-dim", text: "N: layers whose experts are in system RAM (40 = --cpu-moe)" }, g6);
+S("text", { x: P6.x, y: P6.y - 8, "font-size": 11.5, cls: "t-dim", text: "tokens per second" }, g6);
+const pts6 = OFF.filter((o) => nOf(o.setting) != null).map((o) => [nOf(o.setting), o.speed.gen_tok_s]).sort((a, b) => a[0] - b[0]);
+S("path", { d: pts6.map(([n, v], k) => `${k ? "L" : "M"}${X6(n)},${Y6(v)}`).join(" "), fill: "none", stroke: "var(--act)", "stroke-width": 2.4 }, g6);
+pts6.forEach(([n, v]) => { S("circle", { cx: X6(n), cy: Y6(v), r: 5, cls: "f-act" }, g6); S("text", { x: X6(n), y: Y6(v) - 10, "text-anchor": "middle", "font-size": 11, cls: "t-mono", text: v.toFixed(0) }, g6); });
+const fitR = OFF.find((o) => o.setting === "fit");
+PR.refs.forEach((r, k) => { S("line", { x1: P6.x, x2: P6.x + P6.w, y1: Y6(r.gen_tok_s), y2: Y6(r.gen_tok_s), stroke: k ? "var(--h)" : "var(--keep)", "stroke-dasharray": "5 4" }, g6); S("text", { x: P6.x + P6.w + 8, y: Y6(r.gen_tok_s) + 4, "font-size": 11, fill: k ? "var(--h)" : "var(--keep)", text: `${r.name}: ${r.gen_tok_s.toFixed(1)} (avg ${r.avg})` }, g6); });
+S("text", { x: P6.x + P6.w + 8, y: Y6(78) + 4, "font-size": 11, cls: "t-act", text: `35 B Q4_K_M offloaded (avg ${PR.q4_avg})` }, g6);
+if (fitR) S("text", { x: P6.x + P6.w + 8, y: Y6(78) + 22, "font-size": 11, cls: "t-dim", text: `--fit on chose a split: ${fitR.speed.gen_tok_s.toFixed(0)} tok/s` }, g6);
+
+const steps = [
+  { title: "The journey", text: "Download the original weights, convert them to one GGUF file, measure an importance matrix, quantize, check every file's perplexity, serve it, publish it. For the 2 B model the first five steps took under four minutes.", ms: 8000 },
+  { title: "Inside a Hugging Face repo", text: "One big weights file (or many shards with an index), the tokenizer, the chat template, config.json with the architecture, and the model card and licence. 'hf download' fetches any of it.", ms: 7000 },
+  { title: "Inside a GGUF", text: "Settings first (architecture, layer count, context length, licence, chat template), then the tensors, each in its own type. gguf-dump shows it all, and it is how the MTP block was spotted.", ms: 7500 },
+  { title: "What each type costs a small model", text: "On the 2 B, Q8_0 is free, Q4_K_M costs 3.7% perplexity and IQ3_XXS 17%. The 19 B MoE lost nothing measurable at 4 bits: bigger models have more slack.", ms: 8000 },
+  { title: "A gotcha: the MTP head", text: "The extra speculative-decoding block never runs in a normal pass, so the importance matrix has no data for it and very low-bit types refuse to quantize it. Store that block at Q8_0.", ms: 8000 },
+  { title: "Too big for the GPU", text: "A token uses 8 of 256 experts per layer, so experts can live in system RAM and be computed by the CPU, while everything every token needs stays on the GPU. --n-cpu-moe N moves the experts of the first N layers.", ms: 11000 },
+  { title: "What it costs", text: "78 tokens per second with 12 layers' experts in RAM, 33 with all of them. A 12 GiB quantization that fits (UD-IQ3_XXS) runs at 173 with almost the same benchmark score: fit first, offload when nothing good fits.", ms: 9000 },
+];
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    G.forEach((g, k) => show(g, k === i));
+    stBoxes.forEach((b, k) => { b.style.transition = REDUCED ? "none" : `opacity .4s ${k * 0.35}s`; b.style.opacity = i === 0 ? 1 : 0; });
+    playOff(i);
+  },
+});
+
+/* try it: command builder */
+const MODELS = [
+  { id: "19q4", name: "19 B pruned Q4_K_M", path: "gguf/q35-reap-k128/q35-reap-k128-Q4_K_M.gguf", gpu: 10.32, tok: 212 },
+  { id: "19iq4", name: "19 B pruned IQ4_XS", path: "gguf/q35-reap-k128/q35-reap-k128-IQ4_XS.gguf", gpu: 9.2, tok: 202 },
+  { id: "35iq3", name: "35 B UD-IQ3_XXS (unsloth)", path: "gguf/original-unsloth/Qwen3.5-35B-A3B-UD-IQ3_XXS.gguf", gpu: 12.18, tok: 173 },
+  { id: "35q4", name: "35 B Q4_K_M (unsloth), offload", path: "/mnt/f/qwen-scratch/original-unsloth/Qwen3.5-35B-A3B-Q4_K_M.gguf", gpu: null, tok: null },
+];
+const sel = document.getElementById("mf");
+MODELS.forEach((m) => H("option", { value: m.id, text: m.name }, sel));
+const offPts = OFF.filter((o) => nOf(o.setting) != null).map((o) => [nOf(o.setting), o.gpu_weights_mib / 1024, o.speed.gen_tok_s]).sort((a, b) => a[0] - b[0]);
+function interp(N, idx) {
+  if (N <= offPts[0][0]) { const [a, b] = [offPts[0], offPts[1]]; return a[idx] + (N - a[0]) * (b[idx] - a[idx]) / (b[0] - a[0]); }
+  for (let k = 1; k < offPts.length; k++) if (N <= offPts[k][0]) { const [a, b] = [offPts[k - 1], offPts[k]]; return a[idx] + (N - a[0]) * (b[idx] - a[idx]) / (b[0] - a[0]); }
+  return offPts[offPts.length - 1][idx];
+}
+const jSvg = svgRoot(document.getElementById("jbar"), 960, 70, "Predicted GPU memory");
+function tryRender() {
+  const m = MODELS.find((x) => x.id === sel.value), ctx = +document.getElementById("cx").value, kv = document.getElementById("kv").value;
+  const N = +document.getElementById("ncm").value, think = document.getElementById("th").checked;
+  const off = m.id === "35q4";
+  const wGpu = off ? interp(N, 1) : m.gpu;
+  const kvGiB = ctx * (kv === "f16" ? 20 : 10.625) / 2 ** 20, buf = 0.4, tot = wGpu + kvGiB + buf, free = 14.6;
+  const fits = tot <= free;
+  const tok = off ? (N < offPts[0][0] ? null : interp(N, 2)) : m.tok;
+  clear(jSvg);
+  const sc = 900 / 20;
+  [[wGpu, "f-ink3"], [kvGiB, "f-h"], [buf, "f-act"]].reduce((x, [v, cls]) => { S("rect", { x, y: 10, width: v * sc, height: 24, cls }, jSvg); return x + v * sc; }, 10);
+  S("line", { x1: 10 + free * sc, x2: 10 + free * sc, y1: 2, y2: 44, stroke: "var(--cut)", "stroke-dasharray": "5 4" }, jSvg);
+  S("text", { x: 10 + free * sc + 4, y: 58, "font-size": 11, cls: "t-cut", text: "14.6 GiB free" }, jSvg);
+  S("text", { x: 10, y: 58, "font-size": 11, cls: "t-dim", text: `weights ${wGpu.toFixed(1)} + KV ${kvGiB.toFixed(2)} + buffers ${buf} = ${tot.toFixed(1)} GiB` }, jSvg);
+  document.getElementById("j-out").textContent = fits ? `fits · ${tok ? `about ${tok.toFixed(0)} tokens per second (measured)` : "speed not measured below N = 12"}` : "does not fit: lower the context, use a q8_0 cache, or move more experts to RAM";
+  const args = [`llama.cpp/build/bin/llama-server -m ${m.path}`, "-ngl 99"];
+  if (off) args.push(N >= 40 ? "--cpu-moe" : `--n-cpu-moe ${N}`, "--load-mode none");
+  args.push(`-c ${ctx}`);
+  if (kv !== "f16") args.push("-fa on -ctk q8_0 -ctv q8_0");
+  if (!think) args.push("--reasoning off");
+  args.push(think ? "--temp 1.0 --top-p 0.95 --top-k 20 --presence-penalty 1.5" : "--temp 0.7 --top-p 0.8 --top-k 20 --presence-penalty 1.5", "--port 8080");
+  document.getElementById("cmd").textContent = args.join(" \\\n    ");
+}
+["mf", "cx", "kv", "ncm", "th"].forEach((id) => document.getElementById(id).addEventListener("input", tryRender));
+document.getElementById("ncm").value = 16; sel.value = "35q4";
+tryRender();
+</script>
+</body>
+</html>

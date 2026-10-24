@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Calibration Data</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+<style>
+  /* source colors for this chapter: web, chat, math, code */
+  :root { --s-web: #2f6bd1; --s-chat: #7556d1; --s-math: #d98200; --s-code: #b23f84; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --s-web: #6fa3ff; --s-chat: #a68cff; --s-math: #ffb444; --s-code: #ee86c4; } }
+  :root[data-theme="dark"] { --s-web: #6fa3ff; --s-chat: #a68cff; --s-math: #ffb444; --s-code: #ee86c4; }
+  .sw { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Chapter 7</div>
+    <h1>Calibration data</h1>
+    <p class="lede">Every importance score comes from the text we run through the model. Experts that never fire on the
+      calibration text look useless and get deleted, even if they are essential for something else.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="try7">
+    <h2 id="try7">Try it: build your own calibration mix</h2>
+    <div class="row">
+      <label for="m0"><span class="sw" style="background:var(--s-web)"></span>web <input id="m0" type="range" min="0" max="100" value="25"></label>
+      <label for="m1"><span class="sw" style="background:var(--s-chat)"></span>chat <input id="m1" type="range" min="0" max="100" value="25"></label>
+    </div>
+    <div class="row">
+      <label for="m2"><span class="sw" style="background:var(--s-math)"></span>math <input id="m2" type="range" min="0" max="100" value="25"></label>
+      <label for="m3"><span class="sw" style="background:var(--s-code)"></span>code <input id="m3" type="range" min="0" max="100" value="25"></label>
+    </div>
+    <div class="row">
+      <label for="k7">Keep K <input id="k7" type="range" min="16" max="240" step="8" value="128"></label>
+      <span class="readout" id="mix-out"></span>
+    </div>
+    <div class="stage" id="mix-stage"></div>
+    <p class="note">Simulated layer: each expert has a made-up affinity for the four kinds of text, with about a third
+      of them specialists. Experts are kept by how much they are used on the calibration mix you set. The bars show how
+      much of each domain's routing still lands on a kept expert, which is a good early warning for where quality will drop.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p>Our calibration set (<code>02_calib_data.py</code>) is 4 x 131k tokens: educational web text, chat conversations,
+      math reasoning and code reasoning, with chat and reasoning rendered through the model's chat template so the router
+      sees the real special tokens.</p>
+    <p>The statistics found many <b>specialists</b>, experts that get more than 60% of their tokens from one source.
+      At K = 128 the prune still dropped 170 web specialists, and web and wikitext were the domains that lost the most
+      quality. Reasoning text (math and code traces were half of the calibration set) survived best.</p>
+    <p>For a model that only has to be good at code, calibrate on code only. It will keep the code experts and lose more
+      of everything else. Calibrating is choosing what to keep.</p>
+    <p><b>Measured in run 3:</b> pruned to 48 experts (8.9 B), the code-calibrated model lost only 15% on held-out code
+      (perplexity 2.80 → 3.23) where the general-calibrated one lost 69% (→ 4.73). It passed 12 of 15 graded coding answers,
+      against 10 of 15 for the 19 B general model. On general text it got much worse, and when asked for the capital of
+      Australia it answered "<b>A</b>", explaining capital letters and Unicode.</p>
+  </section>
+
+  <section class="facts" aria-label="In this project">
+    <div class="fact"><span class="k">Calibration set</span><span class="v">524,288 tokens</span><span class="n">512 sequences x 1024</span></div>
+    <div class="fact"><span class="k">Specialists found</span><span class="v">716 / 286 / 337 / 238</span><span class="n">web / chat / math / code, out of 10,240</span></div>
+    <div class="fact"><span class="k">Dropped at K=128</span><span class="v">170 / 64 / 107 / 101</span><span class="n">web / chat / math / code specialists</span></div>
+    <div class="fact"><span class="k">Run 3: code-only, 48 experts</span><span class="v">+15% vs +69%</span><span class="n">code perplexity, code vs general calibration</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">freq_by_source</span><span class="n">ExpertStats, analyze_stats.py</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const SRC = ["web", "chat", "math", "code"];
+const SC = ["var(--s-web)", "var(--s-chat)", "var(--s-math)", "var(--s-code)"];
+/* simulated experts: affinity over 4 sources */
+const r = rng(77);
+const EXP = Array.from({ length: 256 }, () => {
+  const base = Math.exp(gauss(r) * 0.45);
+  let a;
+  if (r() < 0.35) { const s = Math.floor(r() * 4); a = [0.06, 0.06, 0.06, 0.06]; a[s] = 0.82; }
+  else { a = [r() + 0.3, r() + 0.3, r() + 0.3, r() + 0.3]; const t = a.reduce((x, y) => x + y, 0); a = a.map((v) => v / t); }
+  return { base, a, use: a.map((v) => v * base) };
+});
+const dom = EXP.map((d) => d.a.indexOf(Math.max(...d.a)));
+const spec = EXP.map((d) => Math.max(...d.a) > 0.6);
+function keptSet(mix, K) {
+  const sc = EXP.map((d, e) => [d.use.reduce((s, u, k) => s + u * mix[k], 0), e]);
+  return new Set(sc.sort((x, y) => y[0] - x[0]).slice(0, K).map(([, e]) => e));
+}
+function domainMass(kept) {
+  return SRC.map((_, s) => { let tot = 0, k = 0; EXP.forEach((d, e) => { tot += d.use[s]; if (kept.has(e)) k += d.use[s]; }); return k / tot; });
+}
+
+const W = 960, HH = 470;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "Calibration sources flow into the experts; the mix decides which experts are kept");
+
+/* sources */
+const srcY = (s) => 80 + s * 84;
+const srcG = S("g", {}, svg);
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "calibration set" }, srcG);
+const srcBars = SRC.map((name, s) => {
+  S("text", { x: 24, y: srcY(s) - 8, "font-size": 12.5, "font-weight": 600, text: name }, srcG);
+  const bg = S("rect", { x: 24, y: srcY(s), width: 150, height: 22, rx: 4, cls: "f-grid" }, srcG);
+  const b = S("rect", { x: 24, y: srcY(s), width: 150, height: 22, rx: 4 }, srcG);
+  b.style.fill = SC[s];
+  const t = S("text", { x: 180, y: srcY(s) + 16, "font-size": 11.5, cls: "t-mono t-dim", text: "131k tok" }, srcG);
+  void bg;
+  return { b, t };
+});
+const srcSub = ["fineweb-edu", "ultrachat_200k", "Mixture-of-Thoughts math", "Mixture-of-Thoughts code"];
+srcSub.forEach((n, s) => S("text", { x: 24, y: srcY(s) + 38, "font-size": 10.5, cls: "t-faint", text: n }, srcG));
+
+/* grid */
+const G = { x: 320, y: 66, c: 20 };
+S("text", { x: G.x, y: 34, "font-size": 14, "font-weight": 600, text: "one layer, 256 experts" }, svg);
+const gridSub = S("text", { x: G.x, y: 52, "font-size": 11, cls: "t-dim", text: "" }, svg);
+const cells = EXP.map((d, e) => S("rect", { x: G.x + (e % 16) * G.c, y: G.y + Math.floor(e / 16) * G.c, width: G.c - 3, height: G.c - 3, rx: 3, cls: "fade" }, svg));
+const crosses = EXP.map((d, e) => {
+  const x = G.x + (e % 16) * G.c, y = G.y + Math.floor(e / 16) * G.c;
+  return S("path", { d: `M${x + 4},${y + 4} L${x + 13},${y + 13} M${x + 13},${y + 4} L${x + 4},${y + 13}`, stroke: "var(--cut)", "stroke-width": 1.8, cls: "fade hide" }, svg);
+});
+const particles = S("g", {}, svg);
+
+/* right panel */
+const R = { x: 680 };
+const rp = S("g", { cls: "fade hide" }, svg);
+const rpTitle = S("text", { x: R.x, y: 34, "font-size": 14, "font-weight": 600, text: "" }, rp);
+S("text", { x: R.x, y: 52, "font-size": 11, cls: "t-dim", text: "share of each domain's routing that is kept" }, rp);
+const massBars = SRC.map((name, s) => {
+  const y = 80 + s * 52;
+  S("text", { x: R.x, y: y - 6, "font-size": 12, text: name }, rp);
+  S("rect", { x: R.x, y, width: 220, height: 18, rx: 3, cls: "f-grid" }, rp);
+  const b = S("rect", { x: R.x, y, width: 0, height: 18, rx: 3 }, rp);
+  b.style.fill = SC[s];
+  const t = S("text", { x: R.x + 226, y: y + 14, "font-size": 12, cls: "t-mono", text: "" }, rp);
+  return { b, t };
+});
+const realBox = S("g", { cls: "fade hide" }, svg);
+S("text", { x: R.x, y: 316, "font-size": 12.5, "font-weight": 600, text: "measured on Qwen3.5-35B-A3B (40 layers)" }, realBox);
+[["specialists", [716, 286, 337, 238]], ["dropped at K=128", [170, 64, 107, 101]]].forEach(([lab, vals], k) => {
+  S("text", { x: R.x, y: 342 + k * 42, "font-size": 11, cls: "t-dim", text: lab }, realBox);
+  vals.forEach((v, s) => { const t = S("text", { x: R.x + s * 64, y: 360 + k * 42, "font-size": 14, "font-weight": 600, cls: "t-mono", text: v }, realBox); t.style.fill = SC[s]; });
+});
+
+function paint(mode, kept) {
+  cells.forEach((c, e) => {
+    if (mode === "none") { c.style.fill = "var(--grid)"; c.style.fillOpacity = 1; }
+    else { c.style.fill = SC[dom[e]]; c.style.fillOpacity = spec[e] ? 0.95 : 0.28; }
+    if (kept) { const k = kept.has(e); c.style.opacity = k ? 1 : 0.25; show(crosses[e], !k); }
+    else { c.style.opacity = 1; show(crosses[e], false); }
+  });
+}
+function setMix(mix, K) {
+  const kept = keptSet(mix, K), m = domainMass(kept);
+  massBars.forEach(({ b, t }, s) => { animAttrs(b, { width: 220 * m[s] }, 700); t.textContent = `${(m[s] * 100).toFixed(0)}%`; });
+  srcBars.forEach(({ b, t }, s) => { animAttrs(b, { width: 150 * mix[s] / Math.max(...mix) }, 600); t.textContent = mix[s] ? `${Math.round(mix[s] * 100)}%` : "0%"; });
+  return kept;
+}
+/* token particles */
+let flow = null;
+function startFlow() {
+  const dots = [];
+  flow = loop((dt) => {
+    if (dots.length < 40 && Math.random() < 0.5) {
+      const s = Math.floor(Math.random() * 4);
+      const cand = EXP.map((d, e) => [d.use[s] * Math.random(), e]).sort((a, b) => b[0] - a[0])[0][1];
+      const el = S("circle", { r: 4 }, particles); el.style.fill = SC[s];
+      dots.push({ el, s, e: cand, t: 0 });
+    }
+    for (let k = dots.length - 1; k >= 0; k--) {
+      const d = dots[k]; d.t += dt / 1300;
+      const x0 = 176, y0 = srcY(d.s) + 11, x1 = G.x + (d.e % 16) * G.c + 8, y1 = G.y + Math.floor(d.e / 16) * G.c + 8;
+      const t = clamp(d.t, 0, 1);
+      d.el.setAttribute("cx", lerp(x0, x1, t)); d.el.setAttribute("cy", lerp(y0, y1, t) - Math.sin(t * Math.PI) * 30);
+      if (d.t >= 1) { const c = cells[d.e]; c.style.fill = SC[d.s]; c.style.fillOpacity = Math.min(1, (+c.style.fillOpacity || 0.1) + 0.12); d.el.remove(); dots.splice(k, 1); }
+    }
+  });
+  flow.start();
+}
+function stopFlow() { if (flow) { flow.stop(); flow = null; } clear(particles); }
+
+const BAL = [0.25, 0.25, 0.25, 0.25], CODE = [0, 0, 0, 1];
+const steps = [
+  { title: "Our calibration set has four kinds of text", text: "131k tokens each of educational web text, chat conversations, math reasoning and code reasoning. 02_calib_data.py downloads and tokenizes them." },
+  { title: "Run them through the model and watch the routing", text: "Every token lights up the experts the router sends it to. Over 524k tokens every expert gets used.", ms: 8000 },
+  { title: "Some experts are specialists", text: "Color shows which kind of text an expert serves most; strong colors are specialists (more than 60% of their tokens from one source). In the real model: 716 web, 286 chat, 337 math, 238 code specialists." },
+  { title: "Balanced mix, keep 128", text: "Score experts on the balanced mix and keep the top 128. Every domain keeps a similar share of its routing. The real prune still dropped 170 web specialists, so web text lost the most quality.", ms: 6500 },
+  { title: "Code-only calibration, keep 128", text: "Calibrate on code only and the same K keeps code experts and deletes many web and chat specialists. Code routing is preserved, the rest suffers.", ms: 6500 },
+  { title: "Calibrating is choosing what to keep", text: "The pruned model is only as good as the calibration set is representative. Want a code model? Calibrate on code. Want a general model? Use a broad mix, and expect the long tail (other languages, rare topics) to suffer first." },
+];
+
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    stopFlow();
+    show(rp, i >= 3); show(realBox, i >= 2);
+    if (i === 0) { paint("none"); setMix(BAL, 128); gridSub.textContent = ""; }
+    if (i === 1) { paint("none"); cells.forEach((c) => (c.style.fillOpacity = 0.1)); gridSub.textContent = "experts light up as tokens arrive"; startFlow(); setMix(BAL, 128); }
+    if (i === 2) { paint("dom"); gridSub.textContent = "color = main source, strong = specialist"; setMix(BAL, 128); }
+    if (i === 3) { rpTitle.textContent = "balanced mix, K = 128"; const k = setMix(BAL, 128); paint("dom", k); gridSub.textContent = "crossed = deleted"; }
+    if (i === 4) { rpTitle.textContent = "code-only mix, K = 128"; const k = setMix(CODE, 128); paint("dom", k); gridSub.textContent = "crossed = deleted"; }
+    if (i === 5) { rpTitle.textContent = "code-only mix, K = 128"; const k = setMix(CODE, 128); paint("dom", k); }
+  },
+});
+
+/* try it */
+const ms = document.getElementById("mix-stage");
+const msv = svgRoot(ms, 760, 250, "Experts kept for your calibration mix");
+const mcells = EXP.map((d, e) => S("rect", { x: 14 + (e % 16) * 14, y: 14 + Math.floor(e / 16) * 14, width: 11, height: 11, rx: 2 }, msv));
+const mbars = SRC.map((name, s) => {
+  const y = 30 + s * 50;
+  S("text", { x: 280, y: y - 6, "font-size": 12, text: `${name} routing kept` }, msv);
+  S("rect", { x: 280, y, width: 380, height: 18, rx: 3, cls: "f-grid" }, msv);
+  const b = S("rect", { x: 280, y, width: 0, height: 18, rx: 3 }, msv); b.style.fill = SC[s];
+  const t = S("text", { x: 668, y: y + 14, "font-size": 12, cls: "t-mono", text: "" }, msv);
+  return { b, t };
+});
+function tryMix() {
+  let mix = [0, 1, 2, 3].map((k) => +document.getElementById("m" + k).value);
+  const tot = mix.reduce((a, b) => a + b, 0) || 1; mix = mix.map((v) => v / tot);
+  const K = +document.getElementById("k7").value;
+  const kept = keptSet(mix, K), m = domainMass(kept);
+  mcells.forEach((c, e) => { c.style.fill = SC[dom[e]]; c.style.fillOpacity = kept.has(e) ? (spec[e] ? 1 : 0.45) : 0.08; });
+  mbars.forEach(({ b, t }, s) => { b.setAttribute("width", 380 * m[s]); t.textContent = `${(m[s] * 100).toFixed(0)}%`; });
+  document.getElementById("mix-out").textContent = `K = ${K} · mix ${mix.map((v) => Math.round(v * 100)).join(" / ")}%`;
+}
+["m0", "m1", "m2", "m3", "k7"].forEach((id) => document.getElementById(id).addEventListener("input", tryMix));
+tryMix();
+</script>
+</body>
+</html>

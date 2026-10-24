@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Pruning Pipeline</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+<style>
+  .cmd { font-family: var(--f-mono); font-size: 0.85rem; background: var(--grid); border-radius: 6px; padding: 8px 10px; overflow-x: auto; white-space: pre; }
+  .gloss { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+  .gloss div { border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 3px; min-width: 0; }
+  .gloss b { font-family: var(--f-mono); font-weight: 600; font-size: 0.92rem; }
+  .gloss span { font-size: 0.9rem; color: var(--ink2); }
+  .gloss a { font-size: 0.8rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Chapter 12</div>
+    <h1>The whole pipeline</h1>
+    <p class="lede">Everything from the previous chapters, in the order the scripts run it in run 2: from a 67 GiB download
+      to an 11 GB file that answers at 190 tokens per second on a 16 GB GPU.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+    <div style="padding: 0 18px 18px"><div class="cmd" id="cmd"></div></div>
+  </section>
+
+  <section class="prose">
+    <h2>After this pipeline</h2>
+    <p>The stages above are run 2. The same scripts with other settings, plus a few new ones, made the rest of the project:</p>
+    <ul>
+      <li><b>Run 3, code specialist</b>: <code>02_calib_data.py --preset code</code>, <code>run_code_sweep.sh</code>,
+        <code>04_prune.py --stats stats/code.pt --keep 48</code>, <code>CALIB=data/calib_code.pt 07_gguf.sh</code>
+        (<a href="d-specialist.html">appendix D</a>).</li>
+      <li><b>Step 2, benchmarks</b>: <code>download_baseline.sh</code>, <code>run_bench.sh</code> →
+        <code>08_bench.py</code>, <code>bench_report.py</code> (<a href="e-benchmark.html">appendix E</a>).</li>
+      <li><b>Step 3, distillation</b>: <code>02_calib_data.py --preset train</code>, <code>09_teacher_logits.py</code>,
+        <code>10_distill.py</code>, <code>11_patch_gguf.py</code>, <code>distill_report.py</code> (<a href="f-training.html">appendix F</a>).</li>
+      <li><b>Experiments</b>: <code>12_expert_tokens.py</code> (<a href="g-experts.html">appendix G</a>) and
+        <code>13_layer_sensitivity.py</code> (a different K per layer, in the project notes).</li>
+      <li><b>Step 4, the quantization curve</b>: <code>14_quant_sweep.sh</code> → <code>15_measure_gguf.sh</code> →
+        <code>speed_test.py</code>, <code>run_bench.sh</code>; <code>quant_report.py</code> (<a href="h-quant.html">appendix H</a>).</li>
+      <li><b>Step 5, ablation and merging</b>: <code>02_calib_data.py --preset domains</code>, <code>run_step5.sh</code> →
+        <code>16_ablate.py</code>, <code>17_expert_similarity.py</code>, <code>05_eval.py --merge</code>;
+        <code>ablation_report.py</code> (<a href="i-ablation.html">appendix I</a>).</li>
+      <li><b>Foundations (chapters 13–16)</b>: <code>kv_memory.sh</code> (KV cache per context), <code>batch_speed.py</code>
+        (throughput against parallel requests), <code>number_formats.py</code> (real weights and activations),
+        <code>theory_report.py</code> (writes the chapters' data).</li>
+      <li><b>Step 6, practical</b>: <code>make_gguf.sh</code> (any HF model to checked GGUF files),
+        <code>offload_sweep.sh</code> (a MoE bigger than the GPU), <code>model_card.py</code>, <code>upload_gguf.sh</code>,
+        <code>practical_report.py</code> (<a href="j-practical.html">appendix J</a>).</li>
+      <li><b>Step 7, speculative decoding</b>: <code>spec_sweep.sh</code> → <code>spec_test.py</code>, and
+        <code>llama-bench -p 1,2,4,8,16</code> for the cost of checking N tokens (<a href="15-speed.html">chapter 15</a>).</li>
+    </ul>
+    <h2>Glossary</h2>
+  </section>
+  <section class="gloss" id="gloss" aria-label="Glossary"></section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+/* stages of run 2 with real sizes and timings; disk = GiB of project data on disk after the stage */
+const STAGES = [
+  { id: "00", name: "setup", out: "venv + llama.cpp", t: "once", disk: 0, ch: 0, cmd: "scripts/00_setup.sh", text: "CUDA toolkit, a Python environment with torch, transformers and flash-linear-attention, and llama.cpp built for the RTX 50xx (sm_120)." },
+  { id: "01", name: "download", out: "67 GiB BF16", t: "~2 min", disk: 67, ch: 1, cmd: "scripts/01_download.sh", text: "The teacher model: 35 B parameters in 14 safetensors shards. Too big for RAM + VRAM, so every later step streams it one layer at a time (chapter 2)." },
+  { id: "02", name: "calibration", out: "524k + 131k tokens", t: "~5 min", disk: 67, ch: 7, cmd: ".venv/bin/python -I scripts/02_calib_data.py", text: "Web, chat, math and code text, tokenized into data/calib.pt (for statistics) and data/eval.pt (held out, for perplexity). Chapters 1 and 7." },
+  { id: "03", name: "expert stats", out: "stats/calib.pt", t: "~3 min", disk: 67, ch: 4, cmd: ".venv/bin/python -I scripts/03_expert_stats.py", text: "Stream the calibration set through all 40 layers and record, for each of 10,240 experts, how often it was picked and its REAP score. Chapters 3, 4 and 6." },
+  { id: "an", name: "analyze", out: "routing mass kept", t: "instant", disk: 67, ch: 5, cmd: ".venv/bin/python -I scripts/analyze_stats.py --keep 128 96", text: "Before deciding on K: at K=128, 65% of the router's choices still land on a surviving expert. Specialists per domain (chapter 7)." },
+  { id: "sw", name: "virtual sweep", out: "ppl per K", t: "~1 min / eval", disk: 67, ch: 8, cmd: "setsid nohup scripts/run_sweep.sh 128 96 > logs/sweep.log 2>&1 &", text: "Prune on the fly and measure held-out perplexity without writing anything: original 4.92, REAP-128 5.92, REAP-96 7.06, frequency-128 6.47, random-128 7.93." },
+  { id: "04", name: "prune", out: "36 GiB, 18.99 B", t: "~3 min", disk: 103, ch: 5, cmd: ".venv/bin/python -I scripts/04_prune.py --keep 128 --criterion reap --out models/q35-reap-k128", text: "Slice 128 of 256 experts out of every layer's tensors and router, set num_experts: 128, drop the MTP head. CPU only." },
+  { id: "05", name: "verify", out: "ppl 5.915", t: "~1 min", disk: 103, ch: 8, cmd: ".venv/bin/python -I scripts/05_eval.py --model models/q35-reap-k128", text: "The checkpoint on disk must reproduce the virtual result (5.916). It did, so slicing, saving and config are right." },
+  { id: "06", name: "heal (optional)", out: "ppl 5.963, undone", t: "~5 min", disk: 103, ch: 9, cmd: ".venv/bin/python -I scripts/06_heal.py --student models/q35-reap-k128 --train router --target moe", text: "Layer-wise router training against the teacher's MoE outputs. Slightly worse, so step 04 was run again to undo it." },
+  { id: "07a", name: "GGUF BF16", out: "35 GB", t: "~6 min", disk: 71, ch: 10, cmd: "rm -rf models/Qwen3.5-35B-A3B   # teacher no longer needed\nscripts/07_gguf.sh models/q35-reap-k128 Q4_K_M IQ4_XS", text: "The teacher was deleted first to make room (it re-downloads in 2 minutes). convert_hf_to_gguf.py --no-mtp writes the llama.cpp file." },
+  { id: "07b", name: "imatrix", out: "imatrix.gguf 187 MB", t: "21 min", disk: 71, ch: 11, cmd: "llama-imatrix -m …-BF16.gguf -f imatrix-calib.txt -c 1024 --chunks 256 --fit on", text: "Run calibration text through the BF16 model and store mean(x²) for every weight column of every matrix. Slow only because 35 GB does not fit in 16 GB of VRAM." },
+  { id: "07c", name: "quantize", out: "11 GB + 9.5 GB", t: "~5 min", disk: 92, ch: 10, cmd: "llama-quantize --imatrix imatrix.gguf …-BF16.gguf …-Q4_K_M.gguf Q4_K_M", text: "Q4_K_M (11 GB) and IQ4_XS (9.5 GB). Wikitext perplexity 8.52 and 8.51 against 8.55 for BF16: the 4-bit step cost nothing measurable." },
+  { id: "run", name: "run it", out: "~190 tok/s", t: "", disk: 57, ch: 12, cmd: "llama.cpp/build/bin/llama-server -m gguf/q35-reap-k128/q35-reap-k128-Q4_K_M.gguf -ngl 99 -c 16384 --port 8089", text: "Fully on the GPU. All three test prompts answered correctly, with and without thinking. The BF16 GGUF was deleted afterwards (57 GiB of model files left)." },
+];
+
+const W = 960, HH = 430;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "The run 2 pipeline from download to llama-server");
+const PER_ROW = 7, BWID = 118, BH = 74, GX = 14;
+const pos = (k) => { const row = k < PER_ROW ? 0 : 1, col = row ? k - PER_ROW : k; return { x: 24 + col * (BWID + GX), y: 24 + row * 166 }; };
+/* track */
+// connectors run between box edges, and from the end of row 1 through the gap to the start of row 2
+let d = "";
+STAGES.forEach((_, k) => {
+  if (k === 0) return;
+  const a = pos(k - 1), b = pos(k);
+  if (a.y === b.y) d += `M${a.x + BWID},${a.y + BH / 2} H${b.x} `;
+  else { const gy = (a.y + BH + b.y) / 2; d += `M${a.x + BWID / 2},${a.y + BH} V${gy} H${b.x + BWID / 2} V${b.y} `; }
+});
+S("path", { d, fill: "none", stroke: "var(--line)", "stroke-width": 3 }, svg);
+const boxes = STAGES.map((s, k) => {
+  const p = pos(k), g = S("g", { cls: "fade" }, svg);
+  const r = S("rect", { x: p.x, y: p.y, width: BWID, height: BH, rx: 8, cls: "box" }, g);
+  S("text", { x: p.x + 10, y: p.y + 18, "font-size": 10.5, cls: "t-mono t-faint", text: s.id }, g);
+  S("text", { x: p.x + 10, y: p.y + 36, "font-size": 13, "font-weight": 600, text: s.name }, g);
+  S("text", { x: p.x + 10, y: p.y + 53, "font-size": 10.5, cls: "t-mono t-h", text: s.out }, g);
+  S("text", { x: p.x + 10, y: p.y + 67, "font-size": 10, cls: "t-dim", text: s.t }, g);
+  return { r, g };
+});
+const packet = S("circle", { r: 8, cls: "f-act" }, svg);
+/* disk meter */
+const DM = { x: 24, y: 360, w: 760 };
+S("text", { x: DM.x, y: DM.y - 8, "font-size": 12, "font-weight": 600, text: "model files on disk" }, svg);
+S("rect", { x: DM.x, y: DM.y, width: DM.w, height: 20, rx: 4, cls: "f-grid" }, svg);
+const dbar = S("rect", { x: DM.x, y: DM.y, width: 0, height: 20, rx: 4, cls: "f-h" }, svg);
+const dtext = S("text", { x: DM.x + DM.w + 10, y: DM.y + 15, "font-size": 13, cls: "t-mono", "font-weight": 600, text: "" }, svg);
+S("text", { x: DM.x, y: DM.y + 38, "font-size": 10.5, cls: "t-faint", text: "0" }, svg);
+S("text", { x: DM.x + DM.w, y: DM.y + 38, "text-anchor": "end", "font-size": 10.5, cls: "t-faint", text: "110 GiB" }, svg);
+
+const cmdEl = document.getElementById("cmd");
+const steps = STAGES.map((s) => ({ title: `${s.id} · ${s.name}`, text: `${s.text} <a href="${s.ch ? CHAPTERS[s.ch - 1][0] : "index.html"}">${s.ch ? "Chapter " + s.ch : ""}</a>`, ms: 5200 }));
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    const p = pos(i);
+    animAttrs(packet, { cx: p.x + BWID - 12, cy: p.y + 14 }, 700);
+    boxes.forEach((b, k) => { b.r.style.stroke = k === i ? "var(--act)" : ""; b.r.style.strokeWidth = k === i ? 2.4 : ""; b.g.style.opacity = k <= i ? 1 : 0.45; });
+    const g = STAGES[i].disk;
+    animAttrs(dbar, { width: (g / 110) * DM.w }, 700);
+    dtext.textContent = `${g} GiB`;
+    cmdEl.textContent = STAGES[i].cmd;
+  },
+});
+
+/* glossary */
+const G = [
+  ["token", "a word piece; the model's unit of text", 1], ["hidden state", "the 2048 numbers describing one token inside the model", 1],
+  ["parameter / weight", "one learned number in a matrix; 2 bytes in BF16", 1], ["embedding / lm_head", "first and last matrices: token ID to vector, vector to next-token scores", 1],
+  ["decoder layer", "one editing step: token mixer + feed-forward, each with a residual add", 2], ["residual connection", "layers add a correction to h instead of replacing it", 2],
+  ["Gated DeltaNet / attention", "the two token mixers, in a 3:1 pattern", 2], ["RMSNorm", "rescales a hidden state before each half of a layer", 2],
+  ["expert", "a small 3-matrix feed-forward network, 3.1 M params", 3], ["MoE, A3B", "256 experts per layer, 8 used per token; ~3 B active of 35 B", 3],
+  ["shared expert", "an extra expert every token uses; never pruned", 3], ["router / gate", "256 x 2048 matrix scoring experts; softmax, top-8, renormalize", 4],
+  ["logits", "raw scores before softmax", 4], ["load-balancing loss", "training term that keeps expert usage even", 4],
+  ["pruning", "deleting parts of a trained model; here whole experts", 5], ["re-routing", "a token served by its next-best surviving experts", 5],
+  ["REAP", "mean of g·‖E(x)‖ over the tokens routed to an expert", 6], ["calibration set", "text used to measure importance; decides what survives", 7],
+  ["specialist", "expert with >60% of its tokens from one source", 7], ["perplexity", "e^(average −ln p of the correct next token); lower is better", 8],
+  ["held-out eval", "text never used for calibration; data/eval.pt", 8], ["distillation", "train a student to match the teacher's distribution (KL)", 9],
+  ["healing (06_heal.py)", "layer-wise router training; did not help here", 9], ["quantization", "storing weights in fewer bits with per-block scales", 10],
+  ["GGUF", "llama.cpp's single-file model format", 10], ["Q4_K_M / IQ4_XS", "~4.8 and 4.25 bits per weight formats", 10],
+  ["imatrix", "per-column mean(x²) from calibration; weights the rounding error", 11], ["MTP head", "multi-token prediction layer for speculative decoding; dropped", 12],
+  ["checkpoint / safetensors", "config.json + weight shards + tokenizer files", 12], ["-ngl 99, --fit on", "llama.cpp: all layers on GPU / auto-fit to VRAM", 12],
+  ["benchmark", "fixed tasks with automatic grading: GSM8K, HumanEval, MMLU", 21], ["pass@1", "share of problems whose first answer passes all tests", 21],
+  ["confidence interval", "range the true score plausibly lies in; overlap means tied", 21], ["gradient", "for each weight, which way and how strongly to change it to lower the loss", 22],
+  ["learning rate", "how far each optimizer step moves the weights", 22], ["KL divergence", "how far the student's distribution is from the teacher's", 22],
+  ["finite difference", "nudge a weight, re-run, compare with the gradient's prediction", 22], ["lift", "how much more often a token reaches an expert than it appears in text", 23],
+  ["bits per weight (bpw)", "file size x 8 / parameters; includes scales and higher-precision tensors", 24], ["k-quant / i-quant", "Q*_K: blocks with quantized scales; IQ*: non-uniform levels and codebooks", 24],
+  ["same top token", "how often the quantized and BF16 models agree on the most likely next token", 24], ["offload / spill", "weights that do not fit in VRAM are read from system RAM; several times slower", 24],
+  ["ablation", "remove one part, keep the rest, measure what breaks: correlation turned into cause", 25], ["deterministic", "same input, bit-identical output on every run; GPU atomic sums are not", 25],
+  ["expert merging", "fold a dropped expert into a similar survivor by averaging weights", 25], ["neuron alignment", "reorder (and sign-flip) one network's hidden neurons to match another's before averaging", 25],
+  ["attention, Q/K/V", "each token compares its query with earlier tokens' keys and averages their values", 13], ["KV cache", "stored keys and values of past tokens; here 20 KiB per token", 13],
+  ["GQA", "grouped-query attention: 2 key/value heads shared by 16 query heads, 8x smaller cache", 13], ["Gated DeltaNet", "linear attention with a fixed 128 x 128 memory per head, updated by the delta rule", 13],
+  ["BF16", "16-bit float with FP32's 8 exponent bits and 7 mantissa bits", 14], ["mantissa / exponent", "the digits and the power of two of a floating-point number", 14],
+  ["prefill / decode", "reading the prompt (compute-bound) / generating one token at a time (memory-bound)", 15], ["memory-bound", "limited by how fast weights are read, not by arithmetic", 15],
+  ["temperature", "divide logits by T before softmax: T < 1 sharper, T > 1 flatter", 16], ["top-p / min-p", "keep the likeliest tokens up to total p / above min_p x the top probability", 16],
+  ["chat template", "how messages become one text with <|im_start|> role markers", 16],
+  ["--n-cpu-moe N", "llama.cpp: keep the experts of the first N layers in system RAM", 26], ["mmproj", "the vision encoder of a GGUF model, in its own file", 26],
+  ["model card", "a repo's README.md: YAML header for the Hub, text for people", 26], ["MTP head", "extra layer for speculative decoding; unused by a normal forward pass", 26],
+  ["speculative decoding", "a cheap drafter guesses tokens, the model checks them all in one pass", 15], ["draft acceptance", "share of drafted tokens the model would have produced itself", 15],
+];
+const gl = document.getElementById("gloss");
+G.forEach(([t, d2, ch]) => { const div = H("div", {}, gl); H("b", { text: t }, div); H("span", { text: d2 }, div); H("a", { href: CHAPTERS[ch - 1][0], text: chapterLabel(ch - 1).toLowerCase() }, div); });
+</script>
+</body>
+</html>

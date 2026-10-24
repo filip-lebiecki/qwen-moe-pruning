@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tokens and Hidden States</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Chapter 1</div>
+    <h1>Tokens and hidden states</h1>
+    <p class="lede">A language model never sees letters. Text is cut into tokens, each token becomes a row of 2048 numbers,
+      and the whole model is a machine that edits those numbers until they predict the next token.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="try1">
+    <h2 id="try1">Try it: real Qwen3.5 tokenizations</h2>
+    <div class="row">
+      <label for="ex">Example text
+        <select id="ex" class="btn"></select>
+      </label>
+      <span class="readout" id="exinfo"></span>
+    </div>
+    <div class="stage" id="tok-stage"></div>
+    <p class="note">The token pieces and IDs are exactly what the model's tokenizer produces. The colored strips are a
+      stand-in for the embedding row (32 of the 2048 numbers, colored by sign and size). Notice that a repeated token
+      such as <code>2</code> always gets the same row: the embedding table is a lookup, not a calculation.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p><b>Tokens</b> are word pieces. Common words are one token; rare words, other languages and numbers are split into
+      several (Polish text above needs 11 tokens for 3 words, and every digit of a number is its own token).</p>
+    <p><b>Embedding</b>: each token ID picks one row of a 248,320 x 2048 table. That row is the token's starting
+      <b>hidden state</b>. The 40 layers then repeatedly edit these vectors, and the <b>lm_head</b> turns the last
+      vector into one score per vocabulary token. The probabilities in the animation are real: they are what your pruned
+      19B model predicts after "The capital of Australia".</p>
+    <p><b>Parameters</b> are all the numbers stored in these matrices. In BF16 each one takes 2 bytes, which is why
+      35 B parameters are about 67 GiB on disk.</p>
+  </section>
+
+  <section class="facts" aria-label="In this project">
+    <div class="fact"><span class="k">Vocabulary</span><span class="v">248,077 tokens</span><span class="n">tables have 248,320 rows (padding)</span></div>
+    <div class="fact"><span class="k">Hidden size</span><span class="v">2048 numbers</span><span class="n"><code>hidden_size</code> in config.json</span></div>
+    <div class="fact"><span class="k">Embedding + lm_head</span><span class="v">1.0 B params</span><span class="n">2 x 248,320 x 2048, not shared</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">Streamer.embed()</span><span class="n">scripts/moe_stream.py</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+/* ---------- main animation ---------- */
+const W = 960, HH = 450;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "Text is split into tokens, looked up in the embedding table, edited by 40 layers and turned into next-token probabilities");
+const TOK = ["The", " capital", " of", " Australia"];
+const IDS = [760, 6511, 314, 8071];
+const NEXT = [[" is", 0.668], [",", 0.154], [".", 0.026], ["↵↵", 0.018], [" was", 0.011], [" has", 0.008]];
+const vis = (el, min, max = 99) => { el.dataset.min = min; el.dataset.max = max; el.classList.add("fade"); return el; };
+const showable = [];
+const reg = (el, min, max) => { showable.push(vis(el, min, max)); return el; };
+
+reg(S("text", { x: W / 2, y: 40, "text-anchor": "middle", "font-size": 26, "font-weight": 600, text: "The capital of Australia" }, svg), 0);
+
+// token chips
+const chipW = TOK.map((t) => 34 + t.length * 12);
+let cx = (W - chipW.reduce((a, b) => a + b, 0) - 14 * 3) / 2;
+const chips = TOK.map((t, k) => {
+  const g = reg(S("g", { transform: `translate(${cx},66)` }, svg), 1);
+  S("rect", { width: chipW[k], height: 34, rx: 7, cls: "f-h-soft", stroke: "var(--h)" }, g).style.stroke = "var(--h)";
+  S("text", { x: chipW[k] / 2, y: 23, "text-anchor": "middle", "font-size": 17, cls: "t-mono", text: t.replace(/^ /, "␣") }, g);
+  const c = { x: cx + chipW[k] / 2 };
+  cx += chipW[k] + 14;
+  return c;
+});
+chips.forEach((c, k) => reg(S("text", { x: c.x, y: 126, "text-anchor": "middle", "font-size": 15, cls: "t-mono t-h", text: `id ${IDS[k]}` }, svg), 2));
+reg(S("text", { x: 40, y: 88, "font-size": 13, cls: "t-dim", text: "tokenizer" }, svg), 1);
+
+// embedding table
+const T = { x: 34, y: 184, w: 128, h: 220 };
+const table = reg(S("g", {}, svg), 3);
+S("rect", { x: T.x, y: T.y, width: T.w, height: T.h, rx: 4, cls: "box-soft" }, table);
+for (let r = 0; r < 44; r++) S("rect", { x: T.x + 4, y: T.y + 4 + r * 4.9, width: T.w - 8, height: 2, cls: "f-grid" }, table);
+S("text", { x: T.x, y: T.y - 10, "font-size": 13, "font-weight": 600, text: "embedding table" }, table);
+S("text", { x: T.x, y: T.y + T.h + 18, "font-size": 12, cls: "t-dim t-mono", text: "248,320 rows x 2048" }, table);
+// rows ordered by ID; spacing is not to scale (all four IDs sit in the first 4% of the table)
+const order = IDS.map((id, k) => [id, k]).sort((a, b) => a[0] - b[0]).map(([, k]) => k);
+const rowY = [];
+order.forEach((k, rank) => { rowY[k] = T.y + 26 + rank * 44; });
+rowY.forEach((y, k) => {
+  S("rect", { x: T.x + 2, y: y - 2, width: T.w - 4, height: 5, rx: 1, cls: "f-h" }, table);
+  S("text", { x: T.x + 8, y: y - 6, "font-size": 10, cls: "t-mono t-h", text: `row ${IDS[k]}` }, table);
+});
+S("text", { x: T.x + T.w / 2, y: T.y + T.h - 8, "text-anchor": "middle", "font-size": 10, cls: "t-faint", text: "(spacing not to scale)" }, table);
+// links id -> row
+chips.forEach((c, k) => {
+  const p = `M${c.x},134 C${c.x},170 ${T.x + T.w + 40},${rowY[k]} ${T.x + T.w},${rowY[k]}`;
+  reg(S("path", { d: p, cls: "wire-h", "stroke-opacity": 0.55 }, svg), 3, 3);
+});
+
+// hidden-state strips
+const SX = 226, SY = 196, GAP = 50, NC = 32, CW = 7;
+const vecs = IDS.map((id) => vecFrom(id, NC));
+const strips = vecs.map((v, k) => {
+  const g = reg(S("g", {}, svg), 4);
+  S("path", { d: `M${T.x + T.w},${rowY[k]} C${T.x + T.w + 30},${rowY[k]} ${SX - 30},${SY + k * GAP + 11} ${SX - 4},${SY + k * GAP + 11}`, cls: "wire", "stroke-dasharray": "3 3" }, g);
+  const st = strip(g, SX, SY + k * GAP, v, CW, 22);
+  S("text", { x: SX + NC * CW + 8, y: SY + k * GAP + 16, "font-size": 13, cls: "t-mono t-dim", text: TOK[k].replace(/^ /, "␣") }, g);
+  return st;
+});
+reg(S("text", { x: SX, y: SY - 12, "font-size": 13, "font-weight": 600, text: "hidden states (32 of 2048 numbers shown)" }, svg), 4);
+
+// layers box
+const L = { x: 562, y: 184, w: 70, h: 220 };
+const layersG = reg(S("g", {}, svg), 5);
+const lbox = S("rect", { x: L.x, y: L.y, width: L.w, height: L.h, rx: 6, cls: "box" }, layersG);
+for (let k = 0; k < 40; k++) S("rect", { x: L.x + 8, y: L.y + 8 + k * 5.1, width: L.w - 16, height: 3.6, rx: 1, cls: (k + 1) % 4 === 0 ? "f-route-soft" : "f-h-soft" }, layersG);
+const sweep = S("rect", { x: L.x + 4, y: L.y + L.h - 12, width: L.w - 8, height: 8, rx: 2, cls: "f-act", opacity: 0.85 }, layersG);
+S("text", { x: L.x + L.w / 2, y: L.y - 10, "text-anchor": "middle", "font-size": 13, "font-weight": 600, text: "40 layers" }, layersG);
+S("text", { x: L.x + L.w / 2, y: L.y + L.h + 18, "text-anchor": "middle", "font-size": 12, cls: "t-dim", text: "edit every vector" }, layersG);
+
+
+// lm_head + next token bars
+const head = reg(S("g", {}, svg), 6);
+S("path", { d: `M${L.x + L.w},${SY + 3 * GAP + 11} L${L.x + L.w + 18},${SY + 3 * GAP + 11}`, cls: "wire-h" }, head);
+S("rect", { x: L.x + L.w + 18, y: SY + 3 * GAP - 8, width: 70, height: 38, rx: 6, cls: "box" }, head);
+S("text", { x: L.x + L.w + 53, y: SY + 3 * GAP + 16, "text-anchor": "middle", "font-size": 13, cls: "t-mono", text: "lm_head" }, head);
+S("path", { d: `M${L.x + L.w + 88},${SY + 3 * GAP + 11} C${L.x + L.w + 104},${SY + 3 * GAP + 11} ${L.x + L.w + 92},${SY + 18} ${L.x + L.w + 110},${SY + 18}`, cls: "wire-h" }, head);
+const BX = L.x + L.w + 114, BMAX = 120;
+S("text", { x: BX, y: SY - 12, "font-size": 13, "font-weight": 600, text: "next token? (real)" }, head);
+const bars = NEXT.map(([t, p], k) => {
+  const y = SY + 6 + k * 34;
+  S("text", { x: BX, y: y + 15, "font-size": 14, cls: "t-mono", text: t.replace(/^ /, "␣") }, head);
+  const r = S("rect", { x: BX + 42, y: y + 2, width: 0, height: 18, rx: 3, cls: "f-h" }, head);
+  S("text", { x: BX + 42 + p * BMAX + 6, y: y + 16, "font-size": 13, cls: "t-mono t-dim", text: p.toFixed(3) }, head);
+  return [r, p];
+});
+
+const foot = reg(S("text", { x: W / 2, y: HH - 10, "text-anchor": "middle", "font-size": 15, text: "" }, svg), 7);
+foot.innerHTML = '<tspan class="t-route" font-weight="600">every box above is a matrix of parameters</tspan><tspan class="t-dim">  ·  35 B parameters x 2 bytes (BF16) = 67 GiB</tspan>';
+
+/* morph strips while the layers "edit" them */
+let morphStop = null;
+function morph(on) {
+  if (morphStop) { morphStop(); morphStop = null; }
+  if (!on) { strips.forEach((s, k) => s.set(vecs[k])); sweep.setAttribute("y", L.y + L.h - 12); return; }
+  const targets = IDS.map((id) => vecFrom(id * 7 + 3, NC));
+  morphStop = tween(3200, (t) => {
+    strips.forEach((s, k) => s.set(vecs[k].map((v, j) => lerp(v, targets[k][j], t))));
+    sweep.setAttribute("y", L.y + L.h - 12 - t * (L.h - 16));
+  });
+}
+
+const steps = [
+  { title: "Start with plain text", text: "This is what you type. The model cannot use letters directly, so the text is first converted to numbers." },
+  { title: "The tokenizer cuts text into tokens", text: "Tokens are word pieces. Here each word is one token; the space before a word belongs to the token (shown as ␣)." },
+  { title: "Each token becomes an integer ID", text: "The vocabulary has 248,077 tokens. These IDs are the real ones from Qwen3.5's tokenizer." },
+  { title: "The ID selects a row of the embedding table", text: "The embedding table has one row per vocabulary entry. Looking up row 8071 gives the starting vector for \"␣Australia\"." },
+  { title: "That row is the token's hidden state", text: "2048 numbers per token (32 shown). Everything the model knows about this token at this moment is encoded here." },
+  { title: "40 layers edit the vectors", text: "Each layer reads all the vectors and adds corrections. After 40 layers the last vector holds the model's idea of what comes next.", ms: 6000 },
+  { title: "lm_head turns the last vector into probabilities", text: "One score per vocabulary token, turned into probabilities. These are real outputs of your pruned 19B model: \"␣is\" 66.8%, \",\" 15.4%." },
+  { title: "All of this is parameters", text: "The embedding table, every layer and lm_head are matrices of learned numbers. Pruning (chapter 5) removes some of them; quantization (chapter 10) stores them in fewer bits." },
+];
+
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    showable.forEach((el) => show(el, i >= +el.dataset.min && i <= +el.dataset.max));
+    morph(i === 5);
+    bars.forEach(([r, p]) => animAttrs(r, { width: i >= 6 ? p * BMAX : 0 }, 900));
+    lbox.style.stroke = i === 7 ? "var(--route)" : "";
+  },
+});
+
+/* ---------- try it ---------- */
+const EXAMPLES = [{"text": "The capital of Australia", "tokens": ["The", " capital", " of", " Australia"], "ids": [760, 6511, 314, 8071]}, {"text": "def fibonacci(n):", "tokens": ["def", " fibonacci", "(n", "):"], "ids": [727, 73111, 1393, 1590]}, {"text": "Pruning removes experts.", "tokens": ["Pr", "uning", " removes", " experts", "."], "ids": [3417, 35971, 27245, 11312, 13]}, {"text": "Zażółć gęślą jaźń", "tokens": ["Z", "aż", "ół", "ć", " g", "ę", "śl", "ą", " ja", "ź", "ń"], "ids": [57, 57897, 45813, 7485, 338, 4991, 156885, 5679, 11598, 38204, 18570]}, {"text": "unbelievably", "tokens": ["un", "belie", "vably"], "ids": [354, 30754, 85098]}, {"text": "2048 + 512 = 2560", "tokens": ["2", "0", "4", "8", " +", " ", "5", "1", "2", " =", " ", "2", "5", "6", "0"], "ids": [17, 15, 19, 23, 478, 220, 20, 16, 17, 283, 220, 17, 20, 21, 15]}];
+const sel = document.getElementById("ex");
+EXAMPLES.forEach((e, k) => H("option", { value: k, text: e.text }, sel));
+const tstage = document.getElementById("tok-stage");
+function drawExample(k) {
+  const e = EXAMPLES[k];
+  clear(tstage);
+  const rowH = 30, h = 40 + e.tokens.length * rowH;
+  const s = svgRoot(tstage, 760, h, `Tokens of ${e.text}`);
+  S("text", { x: 10, y: 22, "font-size": 12, cls: "t-faint t-mono", text: "TOKEN" }, s);
+  S("text", { x: 170, y: 22, "font-size": 12, cls: "t-faint t-mono", text: "ID" }, s);
+  S("text", { x: 260, y: 22, "font-size": 12, cls: "t-faint t-mono", text: "EMBEDDING ROW (32 of 2048)" }, s);
+  e.tokens.forEach((t, j) => {
+    const y = 36 + j * rowH;
+    S("rect", { x: 8, y: y - 2, width: 140, height: 24, rx: 5, cls: "f-h-soft" }, s);
+    S("text", { x: 16, y: y + 15, "font-size": 14, cls: "t-mono", text: t.replace(/ /g, "␣") }, s);
+    S("text", { x: 170, y: y + 15, "font-size": 14, cls: "t-mono t-h", text: e.ids[j] }, s);
+    strip(s, 260, y, vecFrom(e.ids[j], 32), 14, 20);
+  });
+  document.getElementById("exinfo").textContent = `${e.text.length} characters → ${e.tokens.length} tokens`;
+}
+sel.addEventListener("change", () => drawExample(+sel.value));
+drawExample(0);
+</script>
+</body>
+</html>

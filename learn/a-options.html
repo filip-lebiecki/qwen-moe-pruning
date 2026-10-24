@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ways to Shrink a Model</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Appendix A</div>
+    <h1>Ways to shrink a model</h1>
+    <p class="lede">This project started with "shrink Qwen3.8-27B to 9B". There are five different ways to make a model
+      smaller, and they differ in what they remove, whether the model must be retrained afterwards, and what that costs.
+      This page explains why we ended up deleting experts from an MoE model.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="tA">
+    <h2 id="tA">Side by side</h2>
+    <div class="tablewrap">
+      <table class="data">
+        <thead><tr><th>Method</th><th>What gets smaller</th><th>Retraining needed?</th><th>Cost</th><th>In this project</th></tr></thead>
+        <tbody>
+          <tr><td><b>Quantization</b></td><td>bits per weight; every parameter stays</td><td>no (an imatrix pass only)</td><td>minutes to an hour, one GPU</td><td>Q4 of the 19 B model: no measurable loss (8.52 vs 8.55)</td></tr>
+          <tr><td><b>Depth pruning</b></td><td>whole layers</td><td>yes, for anything beyond small cuts</td><td>cheap to cut, expensive to recover</td><td>not tried</td></tr>
+          <tr><td><b>Width pruning</b> (Minitron)</td><td>hidden size, FFN width, heads</td><td>yes: 80–100 B tokens of distillation</td><td>≈ 7,500 H100-hours (estimate)</td><td>not tried: needs a cluster</td></tr>
+          <tr><td><b>Expert pruning</b> (REAP)</td><td>whole experts; MoE models only</td><td>not for moderate cuts</td><td>one 16 GB GPU, under 10 min (stats 3, prune 3, verify 1)</td><td>128 of 256 kept: +20% ppl, works. 48 kept: broken as a general model, but works as a code specialist when calibrated on code only</td></tr>
+          <tr><td><b>Distillation</b></td><td>nothing by itself; it recovers quality after pruning</td><td>it is the training</td><td>full: ≈ 300 GB of GPU memory; routers only: one 16 GB GPU, 2.5 h</td><td>routers only, 1M tokens: KL to the original −18%, perplexity −0.6%, benchmarks within noise (step 3)</td></tr>
+          <tr><td><b>An official small model</b></td><td>trained small from the start</td><td>done by the vendor</td><td>a download</td><td>Qwen/Qwen3.5-9B exists</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">The H100-hour figure is a rough estimate: about 1.1 x 10²² FLOPs (teacher forward + student forward and
+      backward over 100 B tokens) at ~400 TFLOP/s sustained. On one RTX 5070 Ti the same work would take years.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p><b>Quantization</b> and <b>pruning</b> answer different questions. Quantization keeps every parameter and stores it
+      more compactly; a 27 B model stays a 27 B model. Pruning removes parameters, so the parameter count really drops.</p>
+    <p>Cutting layers or narrowing matrices of a <b>dense</b> model damages every token's computation, so the model must be
+      retrained (distilled) on tens of billions of tokens to recover. Deleting <b>experts</b> from an MoE model only affects
+      the tokens that used them, and the router reroutes those to their next choices, which is why a moderate prune works
+      without retraining. Experts can also be scored one layer at a time, which is what made this project fit on one GPU.</p>
+    <p>The two can also be compared head to head. In step 4 the original 35 B, quantized to 2.6 bits per weight, was the
+      same 10.6 GiB file as the pruned 19 B at 4.9 bits, and it scored 91.4 against 82.7 on the benchmarks
+      (<a href="h-quant.html">appendix H</a>). Quantization blurs every weight a little; pruning deletes half the experts
+      outright. Try quantization alone first, and prune when even its smallest usable file is too big.</p>
+  </section>
+
+  <section class="facts" aria-label="Facts">
+    <div class="fact"><span class="k">Qwen3.8-27B</span><span class="v">27.8 B, dense</span><span class="n">64 layers, hidden 5120, FFN 17,408</span></div>
+    <div class="fact"><span class="k">Its embeddings</span><span class="v">2.5 B</span><span class="n">vocab x hidden, twice; width pruning can't remove them</span></div>
+    <div class="fact"><span class="k">NVIDIA's guidance</span><span class="v">80–100 B tokens</span><span class="n">distillation after Minitron pruning</span></div>
+    <div class="fact"><span class="k">Above 50% cut</span><span class="v">iterate</span><span class="n">prune 30%, distill, prune again</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const W = 960, HH = 450;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "A schematic model being shrunk by different methods");
+/* schematic: 16 rows stand for 64 layers; each row = token mixer + feed-forward block */
+const R = { x: 30, y0: 396, rh: 19, n: 16, mixW: 70, ffnW: 380 };
+const rows = [];
+for (let k = 0; k < R.n; k++) {
+  const y = R.y0 - (k + 1) * R.rh;
+  const g = S("g", { cls: "fade" }, svg);
+  const mix = S("rect", { x: R.x, y, width: R.mixW, height: R.rh - 4, rx: 3, cls: "f-route-soft" }, g);
+  const ffn = S("rect", { x: R.x + R.mixW + 6, y, width: R.ffnW, height: R.rh - 4, rx: 3, cls: "f-h-soft" }, g);
+  const cells = [];
+  for (let c = 0; c < 32; c++) cells.push(S("rect", { x: R.x + R.mixW + 6 + c * 11.9, y: y + 2, width: 10, height: R.rh - 8, rx: 2, cls: "f-act fade hide" }, g));
+  const cut = S("path", { d: `M${R.x - 6},${y + (R.rh - 4) / 2} H${R.x + R.mixW + R.ffnW + 12}`, stroke: "var(--cut)", "stroke-width": 2.4, cls: "fade hide" }, g);
+  rows.push({ g, mix, ffn, cells, cut });
+}
+const emb = S("rect", { x: R.x, y: R.y0 + 4, width: R.mixW + R.ffnW + 6, height: 14, rx: 3, cls: "f-grid" }, svg);
+const embT = S("text", { x: R.x + 8, y: R.y0 + 15, "font-size": 10.5, cls: "t-dim", text: "embeddings + lm_head (2.5 B, fixed by the vocabulary)" }, svg);
+const modelT = S("text", { x: R.x, y: 34, "font-size": 14, "font-weight": 600, text: "" }, svg);
+const modelS = S("text", { x: R.x, y: 52, "font-size": 11.5, cls: "t-dim", text: "" }, svg);
+S("text", { x: R.x, y: 76, "font-size": 10.5, cls: "t-faint", text: "each row = 4 layers · violet = token mixer · blue = feed-forward" }, svg);
+
+/* meters */
+const M = { x: 560 };
+S("text", { x: M.x, y: 34, "font-size": 14, "font-weight": 600, text: "where you end up" }, svg);
+const meters = [["parameters", 30, "B"], ["file size", 60, "GB"]].map(([lab, max, unit], k) => {
+  const y = 70 + k * 74;
+  S("text", { x: M.x, y, "font-size": 12, cls: "t-dim", text: lab }, svg);
+  S("rect", { x: M.x, y: y + 8, width: 360, height: 20, rx: 4, cls: "f-grid" }, svg);
+  const b = S("rect", { x: M.x, y: y + 8, width: 0, height: 20, rx: 4, cls: "f-h" }, svg);
+  const t = S("text", { x: M.x, y: y + 48, "font-size": 15, "font-weight": 600, cls: "t-mono", text: "" }, svg);
+  const goal = k === 0 ? S("line", { x1: M.x + (9 / max) * 360, x2: M.x + (9 / max) * 360, y1: y + 2, y2: y + 34, stroke: "var(--act)", "stroke-width": 2, "stroke-dasharray": "4 3" }, svg) : null;
+  if (goal) S("text", { x: M.x + (9 / max) * 360 + 4, y: y + 2, "font-size": 10.5, cls: "t-act", text: "goal 9 B" }, svg);
+  return { b, t, max, unit };
+});
+S("text", { x: M.x, y: 240, "font-size": 12, cls: "t-dim", text: "retraining needed" }, svg);
+const costV = S("text", { x: M.x, y: 266, "font-size": 16, "font-weight": 700, text: "" }, svg);
+const costN = S("text", { x: M.x, y: 290, "font-size": 12, cls: "t-dim", text: "" }, svg);
+const verdict = S("text", { x: M.x, y: 330, "font-size": 13, "font-weight": 600, text: "" }, svg);
+const verdict2 = S("text", { x: M.x, y: 350, "font-size": 12, cls: "t-dim", text: "" }, svg);
+
+function setMeters(params, gb, approx) {
+  [params, gb].forEach((v, k) => {
+    const m = meters[k];
+    animAttrs(m.b, { width: Math.min(1, v / m.max) * 360 }, 800);
+    m.t.textContent = `${approx ? "≈ " : ""}${v} ${m.unit}`;
+  });
+}
+function layout({ keepRows = 16, ffnFrac = 1, mixFrac = 1, experts = false, kept = 32, hatch = false }) {
+  rows.forEach((r, k) => {
+    show(r.cut, k >= keepRows);
+    r.g.style.opacity = k >= keepRows ? 0.35 : 1;
+    animAttrs(r.ffn, { width: R.ffnW * ffnFrac }, 700);
+    animAttrs(r.mix, { width: R.mixW * mixFrac }, 700);
+    r.ffn.style.fillOpacity = experts ? 0 : 1;
+    r.ffn.style.stroke = hatch ? "var(--h)" : "";
+    r.ffn.style.strokeDasharray = hatch ? "3 3" : "";
+    r.mix.style.stroke = hatch ? "var(--route)" : "";
+    r.mix.style.strokeDasharray = hatch ? "3 3" : "";
+    r.cells.forEach((c, j) => { show(c, experts); c.style.opacity = j < kept ? 1 : 0.15; });
+  });
+}
+function say(cost, note, v1, v2, color) {
+  costV.textContent = cost; costN.textContent = note; verdict.textContent = v1; verdict2.textContent = v2;
+  costV.setAttribute("class", color || "");
+}
+
+const steps = [
+  { title: "The starting point: a dense 27 B model", text: "Qwen3.8-27B: 64 layers, each with a token mixer and one big feed-forward block (hidden size 5120, FFN width 17,408). Every token uses every parameter. 55.6 GB in BF16. The goal was about 9 B." },
+  { title: "Option 1: quantize", text: "Keep every parameter, store each in fewer bits. Nothing is removed, so it is still a 27 B model. 4-bit ≈ 16.7 GB; a 2-bit format would reach ≈ 9 GB but with clearly lower quality. No retraining, minutes of work." },
+  { title: "Option 2: cut whole layers (depth pruning)", text: "Delete half of the layers: ≈ 15 B parameters. Fast to do, but every token now skips half of the computation it was trained with. Without retraining this breaks the model." },
+  { title: "Option 3: narrow the matrices (width pruning)", text: "NVIDIA's Minitron recipe shrinks hidden size and FFN width (and can drop layers too). One possible way to reach ≈ 9 B: hidden 5120 → 4096, FFN 17,408 → ~6,900, 64 → 40 layers. The 2.5 B of embeddings cannot shrink; they depend on the vocabulary." },
+  { title: "Options 2 and 3 need distillation", text: "After cutting a dense model by two thirds, it must be retrained to imitate the original: NVIDIA recommends 80–100 B tokens, in stages above 50% compression. That is roughly 7,500 H100-hours, a cluster job, not a 16 GB GPU job." },
+  { title: "Option 4: delete experts from an MoE model", text: "Qwen3.5-35B-A3B has 256 small experts per layer and each token uses only 8. Deleting experts only affects the tokens that used them, and the router reroutes those. Scores can be computed one layer at a time, so it fits on one GPU. This project: 128 of 256 kept gives 19 B and works; 48 kept gives 8.9 B and breaks as a general model, yet works for code when calibrated on code only (run 3).", ms: 7500 },
+  { title: "Option 5: use an official small model", text: "Qwen publishes Qwen3.5-9B, trained small with the full training budget. For a 9 B model that simply works, that is the best choice. Pruning yourself is for learning, for odd sizes, or for specialised models (calibrate on your own domain)." },
+];
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    const dense = i <= 4;
+    modelT.textContent = dense ? "Qwen3.8-27B (dense)" : i === 5 ? "Qwen3.5-35B-A3B (MoE)" : "Qwen3.5-9B (official)";
+    modelS.textContent = dense ? "64 layers, one big feed-forward block per layer" : i === 5 ? "40 layers, 256 experts per layer (32 shown), 8 used per token" : "trained small from the start";
+    embT.textContent = i === 5 ? "embeddings + lm_head (1.0 B)" : "embeddings + lm_head (2.5 B, fixed by the vocabulary)";
+    emb.style.fill = i === 3 ? "var(--cut-soft)" : "";
+    if (i === 0) { layout({}); setMeters(27.8, 55.6); say("—", "", "", ""); }
+    if (i === 1) { layout({ hatch: true }); setMeters(27.8, 16.7, true); say("none", "an imatrix pass, minutes", "still 27.8 B parameters", "4-bit is nearly free; 2-bit costs quality", "t-keep"); }
+    if (i === 2) { layout({ keepRows: 8 }); setMeters(15.2, 30.4, true); say("yes", "depth cut this large breaks the model", "≈ 15 B, BF16", "", "t-cut"); }
+    if (i === 3) { layout({ keepRows: 10, ffnFrac: 0.4, mixFrac: 0.8 }); setMeters(9.0, 18, true); say("yes", "every token's computation changed", "≈ 9 B, BF16", "", "t-cut"); }
+    if (i === 4) { layout({ keepRows: 10, ffnFrac: 0.4, mixFrac: 0.8 }); setMeters(9.0, 18, true); say("80–100 B tokens", "≈ 7,500 H100-hours (estimate)", "years on one RTX 5070 Ti", "", "t-cut"); }
+    if (i === 5) { layout({ keepRows: 16, experts: true, kept: 16, ffnFrac: 1 }); setMeters(19.0, 11); say("none for 50%", "streaming, one GPU, under 10 min", "19 B, Q4_K_M 11 GB: works", "8.9 B (48 experts): broken", "t-keep"); }
+    if (i === 6) { layout({ keepRows: 16, ffnFrac: 0.5, mixFrac: 0.7 }); setMeters(9.0, 5.5, true); say("done by Qwen", "a download", "best quality at 9 B", "Q4 ≈ 5.5 GB", "t-keep"); }
+  },
+});
+</script>
+</body>
+</html>

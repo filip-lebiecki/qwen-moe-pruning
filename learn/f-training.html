@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Distillation Training</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Appendix F · step 3</div>
+    <h1>Training: how distillation changes the routers</h1>
+    <p class="lede">Every page before this one only ran the model. Here its weights change. One training step is a forward
+      pass, a loss, a backward pass and an optimizer step; this page animates each of them as they happen in
+      <code>10_distill.py</code>, on a GPU too small to hold the model, and ends with this run's real loss curve.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="tF">
+    <h2 id="tF">Try it: gradient descent playground</h2>
+    <div class="row">
+      <label for="lr">learning rate <input id="lr" type="range" min="1" max="60" value="12"></label>
+      <label for="noise">batch noise <input id="noise" type="range" min="0" max="100" value="20"></label>
+      <button class="btn primary" id="run" type="button">▶ Train 30 steps</button>
+    </div>
+    <div class="row"><span class="readout" id="pg-out"></span></div>
+    <div class="stage" id="pg-stage"></div>
+    <p class="note">One weight w and a bumpy loss curve. Each step moves w against the gradient, scaled by the learning
+      rate; "batch noise" perturbs the gradient the way a random batch of text does. Try a tiny learning rate (slow), the
+      default (converges), and the maximum (overshoots and diverges). Real training does this for 10.5 million router
+      weights at once.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p><b>Training loop:</b> forward pass → loss → backward pass (gradients by the chain rule, from the loss back to the
+      first layer) → optimizer step (each weight moves against its gradient, scaled by the learning rate). Repeat with a
+      new batch. Watch a held-out validation loss, not the noisy training loss.</p>
+    <p><b>Training on a GPU that is too small:</b> keep each layer's input in RAM during the forward pass, then reload the
+      layers in reverse and recompute each one's forward pass with gradients on. Only one layer is ever on the GPU. The
+      cost is reading the model twice per step.</p>
+    <p><b>Trust, but verify:</b> a finite-difference check (nudge a weight, re-run, compare the change in loss with the
+      gradient's prediction) caught nothing wrong in the streamed backward pass, but its first version raised a false alarm,
+      because the nudge has to be large enough to survive bf16 rounding and small enough not to change which experts get picked.</p>
+  </section>
+
+  <section class="facts" aria-label="Facts">
+    <div class="fact"><span class="k">Trainable</span><span class="v">10.5 M weights</span><span class="n">40 routers + 40 shared-expert gates</span></div>
+    <div class="fact"><span class="k">One step</span><span class="v">32k tokens, ~140 s</span><span class="n">reads 2 x 67 GiB; GPU peak 6.6 GB</span></div>
+    <div class="fact"><span class="k">Optimizer</span><span class="v">AdamW, lr 1e-4</span><span class="n">3-step warm-up, cosine decay, clip 1.0</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">10_distill.py</span><span class="n">Student.forward / loss / backward</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script src="f-training-data.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const W = 960, HH = 470;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "One training step: forward, loss, backward, optimizer");
+
+/* ---- step 0: goal ---- */
+const goalG = S("g", { cls: "fade" }, svg);
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "the goal: make the student's next-token guesses look like the teacher's" }, goalG);
+const LAB = ["␣is", ",", ".", "␣has", "␣was", "other"], TEACH = [0.62, 0.17, 0.04, 0.03, 0.02, 0.12], STUD = [0.38, 0.22, 0.09, 0.06, 0.05, 0.2];
+LAB.forEach((l, k) => {
+  const x = 60 + k * 110;
+  S("text", { x: x + 30, y: 380, "text-anchor": "middle", "font-size": 13, cls: "t-mono", text: l }, goalG);
+  S("rect", { x, y: 360 - TEACH[k] * 420, width: 28, height: TEACH[k] * 420, rx: 3, cls: "f-teach" }, goalG);
+  S("rect", { x: x + 32, y: 360 - STUD[k] * 420, width: 28, height: STUD[k] * 420, rx: 3, cls: "f-h" }, goalG);
+});
+S("line", { x1: 50, x2: 720, y1: 360, y2: 360, cls: "wire" }, goalG);
+S("rect", { x: 740, y: 80, width: 12, height: 12, rx: 3, cls: "f-teach" }, goalG); S("text", { x: 758, y: 91, "font-size": 12, cls: "t-dim", text: "teacher (35 B)" }, goalG);
+S("rect", { x: 740, y: 104, width: 12, height: 12, rx: 3, cls: "f-h" }, goalG); S("text", { x: 758, y: 115, "font-size": 12, cls: "t-dim", text: "student (19 B pruned)" }, goalG);
+["loss = cross-entropy to the", "teacher's top-32 distribution:", "lower when the blue bars", "match the grey ones", "", "(illustrative numbers)"].forEach((t, k) =>
+  S("text", { x: 740, y: 160 + k * 20, "font-size": 12.5, cls: k === 5 ? "t-faint" : "", text: t }, goalG));
+
+/* ---- step 1: gradient descent on a curve ---- */
+const gdG = S("g", { cls: "fade hide" }, svg);
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "gradient descent: walk downhill, one step at a time" }, gdG);
+const F1 = (w) => (w - 1.5) ** 2 + 0.15 * Math.sin(4 * w) + 0.3, G1 = (w) => 2 * (w - 1.5) + 0.6 * Math.cos(4 * w);
+const GX = (w) => 80 + (w + 2) * 150, GY = (l) => 400 - l * 26;
+let dpath = ""; for (let w = -2; w <= 4.5; w += 0.05) dpath += `${dpath ? "L" : "M"}${GX(w)},${GY(F1(w))} `;
+S("path", { d: dpath, fill: "none", stroke: "var(--ink3)", "stroke-width": 2 }, gdG);
+S("text", { x: GX(4.4), y: 418, "text-anchor": "end", "font-size": 11.5, cls: "t-dim", text: "a weight w →" }, gdG);
+S("text", { x: 70, y: 70, "font-size": 11.5, cls: "t-dim", text: "loss" }, gdG);
+const ball = S("circle", { r: 9, cls: "f-act" }, gdG);
+const arrow = S("line", { stroke: "var(--cut)", "stroke-width": 2.5 }, gdG);
+const gdText = [0, 1, 2].map((k) => S("text", { x: 640, y: 120 + k * 24, "font-size": 13, cls: k ? "t-dim" : "t-mono", text: "" }, gdG));
+
+/* ---- steps 2-5: the streamed step ---- */
+const stepG = S("g", { cls: "fade hide" }, svg);
+const stepTitle = S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "" }, stepG);
+const TW = { x: 70, y0: 430, h: 8.6, w: 120 };
+const rows = [], ram = [], dots = [];
+for (let l = 0; l < 40; l++) {
+  const y = TW.y0 - (l + 1) * TW.h;
+  rows.push(S("rect", { x: TW.x, y, width: TW.w, height: TW.h - 2, rx: 2, cls: (l + 1) % 4 === 0 ? "f-route-soft" : "f-h-soft" }, stepG));
+  ram.push(S("rect", { x: 250, y, width: 50, height: TW.h - 2, rx: 2, cls: "f-grid" }, stepG));
+  dots.push(S("circle", { cx: 218, cy: y + TW.h / 2 - 1, r: 3.2, cls: "f-route fade hide" }, stepG));
+}
+S("text", { x: TW.x, y: TW.y0 + 18, "font-size": 11, cls: "t-dim", text: "40 layers (student)" }, stepG);
+S("text", { x: 250, y: TW.y0 + 18, "font-size": 11, cls: "t-dim", text: "RAM: saved inputs" }, stepG);
+S("text", { x: 196, y: 52, "font-size": 10.5, cls: "t-route", text: "router grads" }, stepG);
+const lossBox = S("rect", { x: TW.x, y: 52, width: TW.w, height: 26, rx: 5, cls: "box" }, stepG);
+S("text", { x: TW.x + TW.w / 2, y: 70, "text-anchor": "middle", "font-size": 11.5, "font-weight": 600, text: "loss vs teacher" }, stepG);
+const packet = S("circle", { r: 7, cls: "f-act" }, stepG);
+const gpu = S("g", {}, stepG);
+S("rect", { x: 360, y: 190, width: 200, height: 90, rx: 8, cls: "box" }, gpu);
+S("text", { x: 372, y: 212, "font-size": 12, "font-weight": 600, text: "GPU (16 GB)" }, gpu);
+const gpuT = S("text", { x: 372, y: 240, "font-size": 13, cls: "t-mono", text: "" }, gpu);
+const gpuT2 = S("text", { x: 372, y: 262, "font-size": 11, cls: "t-dim", text: "" }, gpu);
+const info = [0, 1, 2, 3, 4, 5].map((k) => S("text", { x: 600, y: 90 + k * 26, "font-size": 12.5, cls: k === 0 ? "" : "t-dim", text: "" }, stepG));
+const diskT = S("text", { x: 600, y: 300, "font-size": 13, cls: "t-mono", text: "" }, stepG);
+/* lr schedule mini-chart (step 5) */
+const lrG = S("g", { cls: "fade hide" }, stepG);
+const LR = { x: 600, y: 330, w: 320, h: 90 };
+const sched = (s, n) => Math.min(1, (s + 1) / 3) * (0.1 + 0.9 * 0.5 * (1 + Math.cos(Math.PI * s / n)));
+let lp = ""; for (let s = 0; s <= TRAIN.planned_steps; s++) lp += `${lp ? "L" : "M"}${LR.x + (s / TRAIN.planned_steps) * LR.w},${LR.y + LR.h - sched(s, TRAIN.planned_steps) * LR.h} `;
+S("path", { d: `M${LR.x},${LR.y} V${LR.y + LR.h} H${LR.x + LR.w}`, cls: "wire" }, lrG);
+S("path", { d: lp, fill: "none", stroke: "var(--h)", "stroke-width": 2 }, lrG);
+S("text", { x: LR.x, y: LR.y - 6, "font-size": 11, cls: "t-dim", text: "learning rate per step: 3-step warm-up, cosine decay to 10%" }, lrG);
+S("text", { x: LR.x + LR.w, y: LR.y + LR.h + 14, "text-anchor": "end", "font-size": 10.5, cls: "t-faint", text: `step ${TRAIN.planned_steps}` }, lrG);
+
+/* ---- step 6: real curve ---- */
+const curveG = S("g", { cls: "fade hide" }, svg);
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "this run: KL divergence to the teacher, per step (lower is better)" }, curveG);
+const CB = { x: 70, y: 60, w: 820, h: 330 };
+const kmax = Math.max(...TRAIN.train.map((r) => r.kl), ...TRAIN.val.map((r) => r.kl)) * 1.1;
+const CX = (s) => CB.x + (s / TRAIN.planned_steps) * CB.w, CY = (v) => CB.y + CB.h - (v / kmax) * CB.h;
+S("path", { d: `M${CB.x},${CB.y} V${CB.y + CB.h} H${CB.x + CB.w}`, cls: "wire" }, curveG);
+for (let v = 0; v <= kmax; v += 0.05) { S("line", { x1: CB.x, x2: CB.x + CB.w, y1: CY(v), y2: CY(v), stroke: "var(--grid)" }, curveG); S("text", { x: CB.x - 8, y: CY(v) + 4, "text-anchor": "end", "font-size": 10.5, cls: "t-faint t-mono", text: v.toFixed(2) }, curveG); }
+for (let s = 0; s <= TRAIN.planned_steps; s += 10) S("text", { x: CX(s), y: CB.y + CB.h + 16, "text-anchor": "middle", "font-size": 10.5, cls: "t-faint t-mono", text: s }, curveG);
+const trainPath = S("path", { d: "", fill: "none", stroke: "var(--h)", "stroke-width": 1.6, "stroke-opacity": 0.7 }, curveG);
+const valPath = S("path", { d: "", fill: "none", stroke: "var(--keep)", "stroke-width": 3 }, curveG);
+const valDots = TRAIN.val.map((r) => S("circle", { cx: CX(r.step), cy: CY(r.kl), r: 5, fill: "var(--keep)", cls: "fade hide" }, curveG));
+const valLabels = TRAIN.val.map((r) => S("text", { x: CX(r.step) + 8, y: CY(r.kl) - 8, "font-size": 11.5, "font-weight": 600, cls: "t-keep fade hide", text: r.kl.toFixed(4) }, curveG));
+S("rect", { x: CB.x + 560, y: CB.y + 6, width: 12, height: 12, rx: 3, cls: "f-h" }, curveG); S("text", { x: CB.x + 578, y: CB.y + 17, "font-size": 12, cls: "t-dim", text: "training batch (noisy)" }, curveG);
+S("rect", { x: CB.x + 560, y: CB.y + 26, width: 12, height: 12, rx: 3, cls: "f-keep" }, curveG); S("text", { x: CB.x + 578, y: CB.y + 37, "font-size": 12, cls: "t-dim", text: "held-out validation" }, curveG);
+const curveNote = S("text", { x: CB.x, y: CB.y + CB.h + 40, "font-size": 12, cls: "t-dim", text: TRAIN.train.length < TRAIN.planned_steps ? `run in progress: ${TRAIN.train.length} of ${TRAIN.planned_steps} steps so far (re-run scripts/distill_report.py --js to refresh)` : `${TRAIN.planned_steps} steps; routers kept from the step with the best validation KL` }, curveG);
+
+/* ---- step 7: gradient check ---- */
+const gcG = S("g", { cls: "fade hide" }, svg);
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "checking the gradient: does the loss change as predicted?" }, gcG);
+const QX = (w) => 90 + w * 120, QY = (l) => 380 - l * 60;
+const FQ = (w) => 0.5 + 0.35 * (w - 1) ** 2 + 0.6 * w * 0.3;
+let qp = ""; for (let w = 0; w <= 3.6; w += 0.04) qp += `${qp ? "L" : "M"}${QX(w)},${QY(FQ(w))} `;
+S("path", { d: qp, fill: "none", stroke: "var(--ink3)", "stroke-width": 2 }, gcG);
+const w0 = 1.6, e = 0.5, d0 = 0.7 * (w0 - 1) + 0.18;
+S("line", { x1: QX(w0 - 1), y1: QY(FQ(w0) - d0), x2: QX(w0 + 1), y2: QY(FQ(w0) + d0), stroke: "var(--route)", "stroke-width": 2.4 }, gcG);
+S("line", { x1: QX(w0 - e), y1: QY(FQ(w0 - e)), x2: QX(w0 + e), y2: QY(FQ(w0 + e)), stroke: "var(--act)", "stroke-width": 2.4, "stroke-dasharray": "6 4" }, gcG);
+[w0 - e, w0, w0 + e].forEach((w) => S("circle", { cx: QX(w), cy: QY(FQ(w)), r: 5, fill: w === w0 ? "var(--route)" : "var(--act)" }, gcG));
+S("text", { x: QX(w0 + 1) + 6, y: QY(FQ(w0) + d0), "font-size": 12, cls: "t-route", text: "slope from the backward pass" }, gcG);
+S("text", { x: QX(w0 + e) + 6, y: QY(FQ(w0 + e)) + 22, "font-size": 12, cls: "t-act", text: "measured: (L(w+ε) − L(w−ε)) / 2ε" }, gcG);
+const gcT = [`real check (10_distill.py --gradcheck), ratio backward / measured:`, ...TRAIN.gradcheck.map((g) => `  layer ${g.layer}: ${g.ratio.toFixed(2)}`), "", "too small an ε vanishes in bf16 rounding (noise);", "too large switches expert choices (a jump)."];
+gcT.forEach((t, k) => S("text", { x: 560, y: 100 + k * 24, "font-size": 12.5, cls: k === 0 ? "" : k <= TRAIN.gradcheck.length ? "t-mono" : "t-dim", text: t }, gcG));
+
+let stop = null;
+function halt() { if (stop) { stop(); stop = null; } }
+function resetTower() {
+  rows.forEach((r) => (r.style.fill = "")); ram.forEach((r) => r.setAttribute("class", "f-grid")); dots.forEach((d) => show(d, false));
+  lossBox.style.stroke = ""; packet.setAttribute("cy", TW.y0 + 6); packet.setAttribute("cx", TW.x + TW.w / 2);
+}
+function say(lines) { info.forEach((t, k) => (t.textContent = lines[k] || "")); }
+const layerY = (l) => TW.y0 - (l + 0.5) * TW.h - 1;
+
+const steps = [
+  { title: "The goal", text: "The pruned student guesses the next token less like the teacher than before pruning. Training will nudge its routers until the guesses match better. The loss is one number for how far apart the two distributions are." },
+  { title: "Gradient descent", text: "The gradient says which way is uphill for the loss. Each step moves the weight a little the other way: new w = w − learning rate × gradient. Repeat, and the loss goes down. With 10.5 million router weights it is the same idea in 10.5 million directions.", ms: 7500 },
+  { title: "Forward pass, streamed", text: "Run the batch through layers 0 to 39, one layer on the GPU at a time, and copy every layer's input to RAM. No gradients yet. This reads the whole 67 GiB model once.", ms: 7000 },
+  { title: "Loss at the top", text: "Final norm and lm_head turn the last hidden states into next-token probabilities; compare them with the teacher's top-32. The result is the loss, and its gradient with respect to the last hidden state." },
+  { title: "Backward pass, streamed in reverse", text: "Reload layer 39, recompute its forward pass from the saved input with gradients on, and push the gradient back to its input. Then layer 38, and so on to layer 0. Each layer also yields the gradient for its router. This reads the model a second time.", ms: 8000 },
+  { title: "Optimizer step", text: "AdamW moves all 40 routers (and shared-expert gates) a small step against their gradients. The learning rate warms up over 3 steps, then decays along a cosine curve. Gradient clipping stops any single batch from making too big a change." },
+  { title: "Repeat, and watch the validation loss", text: "62 steps of 32k tokens. The training KL jumps from batch to batch because every batch is different text; the held-out validation KL, measured every 8 steps, is the trend that counts. (It sits below the training batches because in this run the validation sequences happened to be code-reasoning text only, which the student already matches better; the script now samples them from every domain.)", ms: 9000 },
+  { title: "Trust, but verify the gradient", text: "Before training, the streamed backward pass was compared with a finite difference: nudge a router, re-run the forward pass, see whether the loss changes as the gradient predicted. Ratios near 1 mean the gradient is right." },
+];
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    halt();
+    show(goalG, i === 0); show(gdG, i === 1); show(stepG, i >= 2 && i <= 5); show(curveG, i === 6); show(gcG, i === 7);
+    show(lrG, i === 5);
+    if (i === 1) {
+      let w = -1.6, k = 0;
+      const lr = 0.12;
+      const draw = () => {
+        ball.setAttribute("cx", GX(w)); ball.setAttribute("cy", GY(F1(w)) - 9);
+        const g = G1(w);
+        arrow.setAttribute("x1", GX(w)); arrow.setAttribute("y1", GY(F1(w)) - 9);
+        arrow.setAttribute("x2", GX(w) - Math.sign(g) * Math.min(90, Math.abs(g) * 25)); arrow.setAttribute("y2", GY(F1(w)) - 9);
+        gdText[0].textContent = `step ${k}: w = ${w.toFixed(3)}`;
+        gdText[1].textContent = `loss ${F1(w).toFixed(3)}, gradient ${g.toFixed(3)}`;
+        gdText[2].textContent = `next w = w − ${lr} × gradient`;
+      };
+      draw();
+      const id = setInterval(() => { if (k >= 14) { clearInterval(id); return; } w -= lr * G1(w); k++; draw(); }, 450);
+      stop = () => clearInterval(id);
+    }
+    if (i >= 2 && i <= 5) resetTower();
+    if (i === 2) {
+      stepTitle.textContent = "forward pass: up through the layers, saving each input";
+      say(["no gradients: just compute and remember", "each layer: disk → GPU → run → free", "its input is copied to RAM (128 MB per layer", "for 32 sequences)"]);
+      stop = tween(5200, (t) => {
+        const n = Math.min(39, Math.floor(t * 40));
+        rows.forEach((r, l) => (r.style.fill = l === n ? "var(--act)" : ""));
+        ram.forEach((r, l) => r.setAttribute("class", l <= n ? "f-h" : "f-grid"));
+        packet.setAttribute("cy", layerY(n)); packet.setAttribute("class", "f-act");
+        gpuT.textContent = `layer ${n}`; gpuT2.textContent = "forward only";
+        diskT.textContent = `read from disk: ${Math.round((n + 1) / 40 * 67)} GiB`;
+      });
+    }
+    if (i === 3) {
+      stepTitle.textContent = "loss: compare with the teacher, get the first gradient";
+      ram.forEach((r) => r.setAttribute("class", "f-h"));
+      lossBox.style.stroke = "var(--cut)"; packet.setAttribute("cy", 65); packet.setAttribute("class", "f-cut");
+      gpuT.textContent = "norm + lm_head"; gpuT2.textContent = "248k scores per token";
+      say(["loss = cross-entropy to the teacher's top-32", "→ dL/d(hidden state at layer 40)", "this gradient now travels downwards"]);
+      diskT.textContent = "read so far: 67 GiB";
+    }
+    if (i === 4) {
+      stepTitle.textContent = "backward pass: down through the layers, recomputing each one";
+      ram.forEach((r) => r.setAttribute("class", "f-h"));
+      say(["for layer 39, 38, … 0:", "  load it, recompute its forward from RAM", "  with gradients on, then backpropagate", "→ gradient for its input (goes down)", "→ gradient for its router (kept)"]);
+      stop = tween(6200, (t) => {
+        const n = 39 - Math.min(39, Math.floor(t * 40));
+        rows.forEach((r, l) => (r.style.fill = l === n ? "var(--cut)" : ""));
+        dots.forEach((d, l) => show(d, l >= n));
+        ram.forEach((r, l) => r.setAttribute("class", l < n ? "f-h" : "f-grid"));
+        packet.setAttribute("cy", layerY(n)); packet.setAttribute("class", "f-cut");
+        gpuT.textContent = `layer ${n}`; gpuT2.textContent = "recompute + backward";
+        diskT.textContent = `read from disk: ${67 + Math.round((40 - n) / 40 * 67)} GiB`;
+      });
+    }
+    if (i === 5) {
+      stepTitle.textContent = "optimizer step: update the 40 routers";
+      dots.forEach((d) => show(d, true));
+      say(["AdamW: each weight moves against its", "gradient, scaled by the learning rate", "and by its own gradient history", "", "then: next batch, next forward pass"]);
+      gpuT.textContent = "routers updated"; gpuT2.textContent = "42 MB of weights";
+      diskT.textContent = "";
+      stop = tween(2400, (t) => rows.forEach((r, l) => (r.style.fill = t * 40 > l ? "var(--keep-soft)" : "")));
+    }
+    if (i === 6) {
+      const tr = TRAIN.train, va = [{ step: 0, kl: TRAIN.val[0] ? TRAIN.val[0].kl : 0 }, ...TRAIN.val.slice(1)];
+      stop = tween(3000, (t) => {
+        const n = Math.max(1, Math.ceil(t * tr.length));
+        trainPath.setAttribute("d", tr.slice(0, n).map((r, k) => `${k ? "L" : "M"}${CX(r.step)},${CY(r.kl)}`).join(" "));
+        const upto = tr[n - 1].step;
+        const vs = va.filter((r) => r.step <= upto);
+        valPath.setAttribute("d", vs.map((r, k) => `${k ? "L" : "M"}${CX(r.step)},${CY(r.kl)}`).join(" "));
+        TRAIN.val.forEach((r, k) => { show(valDots[k], r.step <= upto); show(valLabels[k], r.step <= upto); });
+      });
+      void curveNote;
+    }
+  },
+});
+
+/* ---- try it: playground ---- */
+const pg = svgRoot(document.getElementById("pg-stage"), 760, 260, "Gradient descent on a one-dimensional loss");
+const PX = (w) => 20 + (w + 2) * 70, PY = (l) => 230 - Math.min(l, 9) * 23;
+let pp = ""; for (let w = -2; w <= 5; w += 0.05) pp += `${pp ? "L" : "M"}${PX(w)},${PY(F1(w))} `;
+S("path", { d: pp, fill: "none", stroke: "var(--ink3)", "stroke-width": 2 }, pg);
+const trail = S("path", { d: "", fill: "none", stroke: "var(--act)", "stroke-width": 1.4, "stroke-dasharray": "3 3" }, pg);
+const pball = S("circle", { r: 7, cls: "f-act" }, pg);
+const LC = { x: 540, y: 20, w: 200, h: 150 };
+S("path", { d: `M${LC.x},${LC.y} V${LC.y + LC.h} H${LC.x + LC.w}`, cls: "wire" }, pg);
+S("text", { x: LC.x, y: LC.y - 6, "font-size": 11, cls: "t-dim", text: "loss per step" }, pg);
+const lcurve = S("path", { d: "", fill: "none", stroke: "var(--h)", "stroke-width": 2 }, pg);
+let running = null;
+function playground() {
+  if (running) running();
+  const lr = +document.getElementById("lr").value / 100, noise = +document.getElementById("noise").value / 100;
+  const r = rng(Date.now() % 100000);
+  let w = -1.6, k = 0; const hist = [F1(w)], pts = [[PX(w), PY(F1(w))]];
+  const draw = () => {
+    pball.setAttribute("cx", PX(Math.max(-2, Math.min(5, w)))); pball.setAttribute("cy", PY(F1(Math.max(-2, Math.min(5, w)))) - 7);
+    trail.setAttribute("d", pts.map((p, j) => `${j ? "L" : "M"}${p[0]},${p[1]}`).join(" "));
+    const mx = Math.max(...hist, 1);
+    lcurve.setAttribute("d", hist.map((v, j) => `${j ? "L" : "M"}${LC.x + (j / 30) * LC.w},${LC.y + LC.h - Math.min(1, v / mx) * LC.h}`).join(" "));
+    const status = Math.abs(w) > 6 ? "diverged: the steps overshoot and grow" : k >= 30 ? (F1(w) < 0.5 ? "converged to the valley" : "still on its way (learning rate too small?)") : "training…";
+    document.getElementById("pg-out").textContent = `lr ${lr.toFixed(2)} · step ${k} · w ${w.toFixed(2)} · loss ${F1(w).toFixed(3)} · ${status}`;
+  };
+  draw();
+  const id = setInterval(() => {
+    if (k >= 30 || Math.abs(w) > 6) { clearInterval(id); draw(); return; }
+    w -= lr * (G1(w) + noise * 2.5 * gauss(r)); k++;
+    hist.push(F1(w)); pts.push([PX(Math.max(-2, Math.min(5, w))), PY(F1(Math.max(-2, Math.min(5, w))))]);
+    draw();
+  }, REDUCED ? 0 : 110);
+  running = () => clearInterval(id);
+}
+document.getElementById("run").addEventListener("click", playground);
+["lr", "noise"].forEach((id) => document.getElementById(id).addEventListener("change", playground));
+playground();
+</script>
+</body>
+</html>

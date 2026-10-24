@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pruned Model Answers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+<style>
+  .duel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; }
+  @media (max-width: 760px) { .duel { grid-template-columns: minmax(0, 1fr); } }
+  .side { padding: 16px 18px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+  .side + .side { border-left: 1px solid var(--line); }
+  @media (max-width: 760px) { .side + .side { border-left: 0; border-top: 1px solid var(--line); } }
+  .side header { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; justify-content: space-between; }
+  .side h3 { font-size: 1.05rem; }
+  .meta { font: 500 0.78rem/1.2 var(--f-mono); color: var(--ink3); font-variant-numeric: tabular-nums; }
+  .badge { font: 600 0.75rem/1 var(--f-mono); padding: 5px 8px; border-radius: 999px; letter-spacing: 0.03em; }
+  .badge.ok { background: var(--keep-soft); color: var(--keep); }
+  .badge.bad { background: var(--cut-soft); color: var(--cut); }
+  .out { font: 400 0.86rem/1.55 var(--f-mono); white-space: pre-wrap; overflow-wrap: anywhere; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; min-height: 16em; max-height: 30em; overflow-y: auto; margin: 0; }
+  .out .think { color: var(--ink3); }
+  .cursor { display: inline-block; width: 0.55em; height: 1.05em; background: var(--act); vertical-align: -0.15em; margin-left: 1px; }
+  .prompt { padding: 14px 18px; border-bottom: 1px solid var(--line); display: grid; gap: 4px; }
+  .prompt .k { font: 500 0.72rem/1 var(--f-mono); color: var(--ink3); text-transform: uppercase; letter-spacing: 0.07em; }
+  .prompt .q { font-size: 1.02rem; font-weight: 500; }
+  .why { font-size: 0.88rem; color: var(--ink2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Appendix B</div>
+    <h1>Real answers compared</h1>
+    <p class="lede">Perplexity 5.92 versus 11.7 is abstract. These are the actual answers the two pruned models gave to the
+      same prompts in this project (Q4_K_M, llama-server, temperature 0.6), replayed at the speed they were generated.</p>
+  </header>
+
+  <section class="bench" aria-label="Answers">
+    <div class="prompt"><span class="k" id="pk">Prompt</span><span class="q" id="pq"></span></div>
+    <div class="duel">
+      <div class="side">
+        <header><h3>48 experts · 8.9 B</h3><span id="b48" class="badge"></span></header>
+        <span class="meta" id="m48"></span>
+        <pre class="out" id="o48"></pre>
+        <span class="why" id="w48"></span>
+      </div>
+      <div class="side">
+        <header><h3>128 experts · 19 B</h3><span id="b128" class="badge"></span></header>
+        <span class="meta" id="m128"></span>
+        <pre class="out" id="o128"></pre>
+        <span class="why" id="w128"></span>
+      </div>
+    </div>
+    <div id="story"></div>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p>The 48-expert model still writes fluent, well-formatted text, and simple arithmetic works, because the reasoning
+      experts were well represented in calibration. What breaks first is knowledge and structure: it cannot produce working
+      code, and on a factual question it falls into a <b>repetition loop</b>, a typical sign of a damaged model. The same
+      failure appears in the BF16 file, so it comes from pruning, not from 4-bit quantization.</p>
+    <p>The 128-expert model answers all three correctly. Its explanations can still be simplified or slightly off: with
+      thinking on, it said Sydney was rejected for being "too close to the coast and favored by New South Wales", while the
+      main reason was the Sydney–Melbourne rivalry. Always test real prompts in your own domain before trusting a pruned model.</p>
+    <p>A third 8.9 B model, calibrated on code only (run 3), shows the other side. It passed every Python unit test, but
+      asked the capital question it answered: <i>"The capital of Australia is <b>A</b>. It isn't <b>Syland</b> (or "Sy")
+      because capital letters are determined by the Unicode character encoding…"</i>. Same size as the broken model on the
+      left, but it kept the experts for code instead of a little of everything.</p>
+  </section>
+
+  <section class="facts" aria-label="Facts">
+    <div class="fact"><span class="k">Perplexity</span><span class="v">11.7 vs 5.92</span><span class="n">48 vs 128 experts (original 4.92)</span></div>
+    <div class="fact"><span class="k">Speed</span><span class="v">~180 vs ~190 tok/s</span><span class="n">both fully on the RTX 5070 Ti</span></div>
+    <div class="fact"><span class="k">File</span><span class="v">4.9 GB vs 11 GB</span><span class="n">Q4_K_M</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">scripts/ask.py</span><span class="n">sends the prompts to llama-server</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const LOOP = "<think>\n\n<think>\n\n<think>\n\n<think>\n\n<think>\n\n" + "**\n\n".repeat(60);
+const CASES = [
+  {
+    q: "What is the capital of Australia, and why isn't it Sydney? Answer in 3 sentences.", mode: "thinking off",
+    a48: { text: LOOP, more: "\n[… \"**\" keeps repeating until the 1,500-token limit]", tok: 1500, tps: 177, ok: false, why: "Repetition loop: the model never produces an answer." },
+    a128: { text: "The capital of Australia is Canberra, not Sydney. Canberra was deliberately chosen in 1908 to be a neutral location situated between the two largest and most competitive cities, Sydney and Melbourne. This decision was made to avoid favoring one state over the others and to establish a dedicated site for the nation's federal government.", tok: 66, tps: 155, ok: true, why: "Correct, three sentences as asked." },
+  },
+  {
+    q: "Write a Python function that returns the n-th Fibonacci number iteratively.", mode: "thinking off",
+    a48: { text: "To write a Python function that returns the n-th Fibonacci number iteratively, we can use a recursive approach. The Fibonacci sequence starts with 0, 1, and each subsequent number is the sum of the two preceding numbers.\n\nHere is the Python function for calculating the n-th Fibonacci number iteratively:\n\n```python\ndef(n) = def(n-1) + def(n-2)\n```\n\nWhere `def(n)` represents the n-th Fibonacci number.\n\nTo implement this, you can use the following Python function:\n\n```python\ndef(n) = def(n-1) + def(n-2)\n```\n\nWith the initial values:\n```python\ndef(0) = 0\ndef(1) = 1\n```\n\nLet's now implement this iteratively for a given n:\n\n```python\ndef(n) = def(n-1) + def(n-2)\n```\n\nThis function will return the n-th Fibonacci number.", tok: 203, tps: 182, ok: false, why: "Fluent prose, but the \"code\" is not Python and contradicts itself (\"iteratively\" … \"a recursive approach\")." },
+    a128: { text: "Here is an iterative Python function to compute the n-th Fibonacci number:\n\n```python\ndef fibonacci_iterative(n):\n    if n < 0:\n        raise ValueError(\"Fibonacci numbers are defined for non-negative integers.\")\n    if n == 0:\n        return 0\n    if n == 1:\n        return 1\n\n    prev, curr = 0, 1\n    for _ in range(2, n + 1):\n        prev, curr = curr, prev + curr\n\n    return curr\n```\n\n### How it works:\n- **Base cases**: Returns `0` for `n = 0` and `1` for `n = 1`.\n- **Loop**: Starts from `2` up to `n`, updating the pair `(prev, curr)` so that `curr` always holds the latest Fibonacci number.\n- **Efficiency**: Time complexity is **O(n)** and space complexity is **O(1)**.\n\n### Example usage:\n```python\nprint(fibonacci_iterative(10))  # Output: 55\nprint(fibonacci_iterative(0))   # Output: 0\nprint(fibonacci_iterative(1))   # Output: 1\n```", tok: 268, tps: 187, ok: true, why: "Working code with input check, explanation and correct example outputs." },
+  },
+  {
+    q: "If a train travels 180 km in 2.5 hours, what is its average speed in km/h?", mode: "thinking off",
+    a48: { text: "To find the average speed (rate of travel) in km/h, we divide the total distance traveled by the total time taken.\n\n**Given:**\n*   Distance: $180 \\text{ km}$\n*   Time: $2.5 \\text{ hours}$\n\n**Calculation:**\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n$$ \\text{Speed} = \\frac{180 \\text{ km}}{2.5 \\text{ h}} $$\n\n$$ \\text{Speed} = \\frac{180}{2.5} \\text{ km/h} $$\n\n$$ \\text{Speed} = 72 \\text{ km/h} $$\n\nThe average speed is **72 km/h**.", tok: 169, tps: 182, ok: true, why: "Correct. Simple arithmetic survived even the heavy prune." },
+    a128: { text: "To find the average speed, we use the formula:\n\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\n**Given:**\n*   Distance = $180 \\text{ km}$\n*   Time = $2.5 \\text{ hours}$\n\n**Calculation:**\n$$ \\text{Speed} = \\frac{180}{2.5} $$\n\nTo make the division easier, you can multiply both the numerator and the denominator by 10 to remove the decimal:\n$$ \\frac{180 \\times 10}{2.5 \\times 10} = \\frac{1800}{25} $$\n\nNow, divide $1800$ by $25$:\n$$ 1800 \\div 25 = 72 $$\n\n**Answer:**\nThe train's average speed is **72 km/h**.", tok: 200, tps: 194, ok: true, why: "Correct, with a clearer derivation." },
+  },
+  {
+    q: "What is the capital of Australia, and why isn't it Sydney? Answer in 3 sentences.", mode: "thinking on",
+    a48: { think: "<think>  <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think> <think>", text: "", more: "\n[answer: empty]", tok: 113, tps: null, ok: false, why: "The thinking channel only repeats the <think> tag; no answer at all." },
+    a128: { think: "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Question: What is the capital of Australia, and why isn't it Sydney?\n    *   Constraint: Answer in exactly 3 sentences.\n\n2.  **Identify Key Information:**\n    *   Capital: Canberra.\n    *   Reason for not being Sydney: Sydney is the lar", thinkMore: " […] (2,763 characters of reasoning)", text: "The capital of Australia is Canberra, not Sydney. Sydney was rejected because it was too close to the coast and favored by New South Wales. Canberra was chosen as a neutral, purpose-built location to settle disputes between the states during federation.", tok: 693, tps: 192, ok: true, why: "Structured reasoning, right capital. The stated reason is simplified: the main one was the Sydney–Melbourne rivalry." },
+  },
+];
+const BF16_NOTE = "The 48-expert BF16 file (no quantization) failed the same way: \"The capital of Australia is **not** a single location, but rather a **geographical concept** … the \"state\" of the \"state\" (the \"state\" of the \"state\" …\"";
+
+let timers = [];
+function stopAll() { timers.forEach((t) => t()); timers = []; }
+function typeOut(pre, ans) {
+  clear(pre);
+  const thinkSpan = H("span", { cls: "think" }, pre);
+  const textSpan = H("span", {}, pre);
+  const cur = H("span", { cls: "cursor" }, pre);
+  const think = (ans.think || ""), body = ans.text || "";
+  const all = think.length + body.length;
+  const charsPerSec = (ans.tps || 180) * 4; // replay at about the generation speed (~4 characters per token)
+  if (REDUCED) {
+    thinkSpan.textContent = think + (ans.thinkMore || "") + (think ? "\n\n" : "");
+    textSpan.textContent = body + (ans.more || ""); cur.remove(); return;
+  }
+  let stop = false; const t0 = performance.now();
+  function frame(now) {
+    if (stop) return;
+    const n = Math.min(all, Math.floor(((now - t0) / 1000) * charsPerSec));
+    thinkSpan.textContent = think.slice(0, n) + (n >= think.length && think ? (ans.thinkMore || "") + "\n\n" : "");
+    textSpan.textContent = n > think.length ? body.slice(0, n - think.length) : "";
+    pre.scrollTop = pre.scrollHeight;
+    if (n < all) requestAnimationFrame(frame);
+    else { textSpan.textContent = body + (ans.more || ""); cur.remove(); }
+  }
+  requestAnimationFrame(frame);
+  timers.push(() => { stop = true; });
+}
+function showSide(id, ans) {
+  const b = document.getElementById("b" + id);
+  b.textContent = ans.ok ? "correct" : "broken"; b.className = "badge " + (ans.ok ? "ok" : "bad");
+  document.getElementById("m" + id).textContent = ans.tps ? `${ans.tok} tokens · ${ans.tps} tok/s` : `${ans.tok} tokens · speed not recorded`;
+  document.getElementById("w" + id).textContent = ans.why;
+  typeOut(document.getElementById("o" + id), ans);
+}
+const steps = CASES.map((c, k) => ({
+  title: `Prompt ${k + 1} of ${CASES.length}, ${c.mode}`,
+  text: k === 0 ? `${c.a48.ok ? "" : "48 experts: " + c.a48.why} ${BF16_NOTE}` : `48 experts: ${c.a48.why} 128 experts: ${c.a128.why}`,
+  ms: 9000,
+}));
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    stopAll();
+    const c = CASES[i];
+    document.getElementById("pk").textContent = `Prompt · ${c.mode}`;
+    document.getElementById("pq").textContent = c.q;
+    showSide("48", c.a48); showSide("128", c.a128);
+  },
+});
+</script>
+</body>
+</html>

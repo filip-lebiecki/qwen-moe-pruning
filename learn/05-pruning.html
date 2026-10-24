@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pruning Experts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Chapter 5</div>
+    <h1>What pruning experts does</h1>
+    <p class="lede">Pruning keeps the K most important experts in every layer and deletes the rest. Mechanically it is
+      just slicing three tensors. The quality cost comes from tokens whose favourite experts are gone.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="try5">
+    <h2 id="try5">Try it: choose K</h2>
+    <div class="row">
+      <label for="k">Experts kept per layer <input id="k" type="range" min="8" max="256" step="8" value="128"></label>
+      <span class="readout" id="k-out"></span>
+    </div>
+    <div class="tablewrap">
+      <table class="data" id="ktable">
+        <thead><tr><th>K kept</th><th>params</th><th>BF16 size</th><th>routing mass kept</th><th>perplexity</th><th>verdict</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="note">Rows with numbers are measured on Qwen3.5-35B-A3B in this project (REAP criterion, held-out eval set).
+      Params = 2.43 B always-on + 0.45 B vision + K x 126 M. "Routing mass kept" is the share of all top-8 picks in the
+      calibration set that land on a surviving expert (<code>analyze_stats.py</code>).</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p>For each layer, <code>04_prune.py</code> keeps the K slices of <code>experts.gate_up_proj</code> and
+      <code>experts.down_proj</code> and the K matching rows of the router matrix <code>gate.weight</code>, and writes
+      <code>"num_experts": K</code> into config.json. Nothing else changes.</p>
+    <p>The router still works, because softmax and top-8 simply run over fewer candidates. But a token whose best experts
+      were deleted is now served by its 9th, 10th, 11th choice, experts trained for slightly different tokens. The more of
+      the routing that has to fall back like this, the worse the model gets: 65% routing mass kept at K=128 was fine,
+      28% at K=48 broke the model.</p>
+    <p>Active parameters per token do not change (still 8 experts), so the pruned model runs at about the same speed but
+      needs much less memory.</p>
+  </section>
+
+  <section class="facts" aria-label="In this project">
+    <div class="fact"><span class="k">Run 2</span><span class="v">256 → 128 experts</span><span class="n">35 B → 18.99 B params, 36 GiB</span></div>
+    <div class="fact"><span class="k">Saved per expert index</span><span class="v">126 M params</span><span class="n">3.15 M x 40 layers</span></div>
+    <div class="fact"><span class="k">Time</span><span class="v">~3 min, CPU only</span><span class="n">it is only slicing and saving</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">prune_layer_state()</span><span class="n">scripts/moe_stream.py, 04_prune.py</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const W = 960, HH = 480;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "Pruning: keep the top K experts, slice the tensors, tokens get re-routed");
+const MEASURED = { 256: [4.92, 100, "original"], 128: [5.92, 64.9, "fine, all test prompts right"], 96: [7.06, 51.9, "noticeably worse"], 64: [9.72, 36.2, "weak"], 48: [11.7, 28.1, "broken code, loops"] };
+const params = (K) => 2.43 + 0.45 + K * 0.1258;
+
+/* importance scores: experts 203 and 17 are made unimportant on purpose for the example token */
+const r = rng(11);
+const score = Array.from({ length: 256 }, () => Math.pow(r(), 0.8));
+score[203] = 0.05; score[17] = 0.08;
+[88, 150, 4, 231, 61, 119, 77, 190].forEach((e) => (score[e] = 0.6 + r() * 0.4));
+const rank = score.map((s, e) => [s, e]).sort((a, b) => b[0] - a[0]).map(([, e]) => e);
+const rankOf = new Array(256); rank.forEach((e, k) => (rankOf[e] = k));
+
+/* grid */
+const G = { x: 24, y: 70, c: 19 };
+S("text", { x: G.x, y: 34, "font-size": 14, "font-weight": 600, text: "one layer, 256 experts" }, svg);
+const gridSub = S("text", { x: G.x, y: 52, "font-size": 11, cls: "t-dim", text: "shade = importance score" }, svg);
+const cells = score.map((s, e) => S("rect", { x: G.x + (e % 16) * G.c, y: G.y + Math.floor(e / 16) * G.c, width: G.c - 3, height: G.c - 3, rx: 3, cls: "fade" }, svg));
+const kLabel = S("text", { x: G.x, y: G.y + 16 * G.c + 24, "font-size": 15, "font-weight": 600, cls: "t-mono", text: "" }, svg);
+
+/* tensors */
+const TX = 360;
+const tens = S("g", { cls: "fade hide" }, svg);
+S("text", { x: TX, y: 34, "font-size": 14, "font-weight": 600, text: "what 04_prune.py changes" }, tens);
+const TS = [["experts.gate_up_proj", "1024, 2048"], ["experts.down_proj", "2048, 512"], ["gate.weight (router)", "2048"]];
+const tBars = TS.map(([name, rest], k) => {
+  const y = 64 + k * 62;
+  S("text", { x: TX, y: y + 12, "font-size": 12, cls: "t-mono", text: name }, tens);
+  S("rect", { x: TX, y: y + 20, width: 256, height: 18, rx: 3, cls: "f-grid" }, tens);
+  const b = S("rect", { x: TX, y: y + 20, width: 256, height: 18, rx: 3, cls: "f-keep" }, tens);
+  const t = S("text", { x: TX + 264, y: y + 34, "font-size": 12, cls: "t-mono t-dim", text: `[256, ${rest}]` }, tens);
+  return { b, t, rest };
+});
+const cfg = S("text", { x: TX, y: 268, "font-size": 13, cls: "t-mono", text: "" }, tens);
+
+/* re-routing of one token */
+const RR = { x: 360, y: 300 };
+const rr = S("g", { cls: "fade hide" }, svg);
+S("text", { x: RR.x, y: RR.y, "font-size": 14, "font-weight": 600, text: "token \"␣Australia\": its router preferences (made-up example)" }, rr);
+S("text", { x: RR.x, y: RR.y + 18, "font-size": 11, cls: "t-dim", text: "best first; amber = used (top 8 among survivors), red = pruned, grey = not chosen" }, rr);
+const PREF = [[203, 0.09], [17, 0.07], [88, 0.05], [150, 0.045], [4, 0.04], [231, 0.04], [61, 0.035], [119, 0.03], [77, 0.028], [190, 0.026], [12, 0.025], [140, 0.022]];
+const chips = PREF.map(([e, p], k) => {
+  const x = RR.x + k * 48, y = RR.y + 34;
+  const rect = S("rect", { x, y, width: 42, height: 40, rx: 6, cls: "f-grid fade" }, rr);
+  S("text", { x: x + 21, y: y + 17, "text-anchor": "middle", "font-size": 12, "font-weight": 600, cls: "t-mono", text: e }, rr);
+  S("text", { x: x + 21, y: y + 32, "text-anchor": "middle", "font-size": 10, cls: "t-mono t-dim", text: p.toFixed(3) }, rr);
+  const cross = S("path", { d: `M${x + 4},${y + 4} L${x + 38},${y + 36} M${x + 38},${y + 4} L${x + 4},${y + 36}`, stroke: "var(--cut)", "stroke-width": 2.2, cls: "fade hide" }, rr);
+  return { rect, cross, e, p };
+});
+const massText = S("text", { x: RR.x, y: RR.y + 104, "font-size": 13, cls: "t-mono", text: "" }, rr);
+const fallText = S("text", { x: RR.x, y: RR.y + 124, "font-size": 12, cls: "t-dim", text: "" }, rr);
+
+/* measured table on the right */
+const MT = { x: 760, y: 64 };
+const mt = S("g", { cls: "fade hide" }, svg);
+S("text", { x: MT.x, y: 34, "font-size": 14, "font-weight": 600, text: "measured" }, mt);
+["K", "params", "ppl"].forEach((h, k) => S("text", { x: MT.x + [0, 50, 130][k], y: MT.y, "font-size": 10.5, cls: "t-faint t-mono", text: h }, mt));
+const mrows = [256, 128, 96, 64, 48].map((K, k) => {
+  const y = MT.y + 26 + k * 28;
+  const bg = S("rect", { x: MT.x - 6, y: y - 17, width: 186, height: 24, rx: 4, cls: "f-act-soft fade hide" }, mt);
+  S("text", { x: MT.x, y, "font-size": 13, cls: "t-mono", text: K }, mt);
+  S("text", { x: MT.x + 50, y, "font-size": 13, cls: "t-mono", text: `${params(K).toFixed(1)} B` }, mt);
+  S("text", { x: MT.x + 130, y, "font-size": 13, cls: "t-mono", "font-weight": 600, text: MEASURED[K][0].toFixed(2) }, mt);
+  return { K, bg };
+});
+
+function paintGrid(K, mode) {
+  cells.forEach((c, e) => {
+    const kept = rankOf[e] < K;
+    if (mode === "score") { c.style.fill = "var(--h)"; c.style.fillOpacity = (0.12 + 0.88 * score[e]).toFixed(2); c.style.stroke = ""; }
+    else if (mode === "mark") { c.style.fill = kept ? "var(--keep)" : "var(--cut)"; c.style.fillOpacity = kept ? 0.85 : 0.75; }
+    else { c.style.fill = kept ? "var(--keep)" : "var(--grid)"; c.style.fillOpacity = kept ? 0.85 : 0.5; }
+  });
+  kLabel.textContent = mode === "score" ? "256 experts" : `keep ${K}, delete ${256 - K}`;
+}
+function setTensors(K) {
+  tBars.forEach(({ b, t, rest }) => { animAttrs(b, { width: K }, 800); t.textContent = `[${K}, ${rest}]`; });
+  cfg.textContent = `config.json  "num_experts": ${K}`;
+}
+function reroute(K) {
+  const alive = PREF.filter(({ 0: e }) => rankOf[e] < K);
+  const used = new Set(alive.slice(0, 8).map(([e]) => e));
+  let massKept = 0;
+  chips.forEach((c, k) => {
+    const dead = rankOf[c.e] >= K;
+    show(c.cross, dead);
+    c.rect.style.fill = dead ? "var(--cut-soft)" : used.has(c.e) ? "var(--act-soft)" : "var(--grid)";
+    c.rect.style.stroke = used.has(c.e) ? "var(--act)" : "none";
+    if (k < 8 && !dead) massKept++;
+  });
+  massText.textContent = `${massKept} of its original top 8 survive`;
+  const fallback = [...used].filter((e) => PREF.findIndex(([x]) => x === e) >= 8);
+  fallText.textContent = fallback.length ? `replaced by its choices #${fallback.map((e) => PREF.findIndex(([x]) => x === e) + 1).join(", #")}: experts ${fallback.join(", ")}` : "nothing to replace";
+}
+function highlightRow(K) { mrows.forEach((m) => show(m.bg, m.K === K)); }
+
+let sweep = null, pending = null;
+const steps = [
+  { title: "Every expert gets an importance score", text: "Chapter 6 explains how the score is computed. Darker squares are more important experts in this layer." },
+  { title: "Keep the top K = 128", text: "Rank the 256 experts by score and keep the best half (teal). The red half will be deleted. This is decided separately for each of the 40 layers." },
+  { title: "Delete the others", text: "The 128 low-scoring experts are removed from this layer." },
+  { title: "In the file: slice three tensors", text: "The expert tensors keep 128 of their 256 slices, and the router keeps the 128 matching rows. Everything else in the layer is copied unchanged." },
+  { title: "Tell the model it has 128 experts now", text: "config.json gets \"num_experts\": 128. transformers, vLLM and llama.cpp then load it like any other Qwen3.5-MoE." },
+  { title: "Tokens lose some favourite experts", text: "In the made-up example from chapter 4, this token's two best experts, 203 and 17, were deleted. The router now gives it experts 77 and 190, its 9th and 10th choices. That fallback is where quality is lost.", ms: 7000 },
+  { title: "Fewer experts, more fallback", text: "Going from 256 down to 48 experts, more and more of every token's routing has to fall back. Perplexity (chapter 8) climbs from 4.92 to 11.7.", ms: 9000 },
+  { title: "Result of run 2", text: "128 experts: 18.99 B parameters, 36 GiB instead of 67, the same ~3 B active per token, and perplexity 5.92 instead of 4.92." },
+];
+
+const story = new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    if (sweep) { sweep(); sweep = null; }
+    clearTimeout(pending);
+    show(tens, i >= 3); show(rr, i >= 5); show(mt, i >= 6);
+    gridSub.textContent = i === 0 ? "shade = importance score" : "teal = kept, red = deleted";
+    if (i === 0) { paintGrid(256, "score"); setTensors(256); }
+    if (i === 1) paintGrid(128, "mark");
+    if (i >= 2 && i !== 6) paintGrid(128, "cut");
+    if (i === 3 || i === 4 || i === 5 || i === 7) setTensors(128);
+    if (i === 3) { setTensors(256); pending = setTimeout(() => setTensors(128), 400); }
+    if (i === 5 || i === 7) reroute(128);
+    if (i === 7) highlightRow(128);
+    if (i === 6) {
+      const Ks = [256, 128, 96, 64, 48];
+      let k = 0;
+      const stepK = () => { const K = Ks[k]; paintGrid(K, "cut"); setTensors(K); reroute(K); highlightRow(K); };
+      stepK();
+      const id = setInterval(() => { k++; if (k >= Ks.length) { clearInterval(id); return; } stepK(); }, 1700);
+      sweep = () => clearInterval(id);
+    }
+  },
+});
+
+/* try it */
+const tbody = document.querySelector("#ktable tbody");
+[256, 192, 160, 128, 96, 64, 48, 32, 16, 8].forEach((K) => {
+  const m = MEASURED[K];
+  H("tr", { "data-k": K, html: `<td>${K}</td><td>${params(K).toFixed(2)} B</td><td>${(params(K) * 2 / 1.0737).toFixed(0)} GiB</td><td>${m ? m[1].toFixed(1) + "%" : "-"}</td><td>${m ? m[0].toFixed(2) : "not measured"}</td><td>${m ? m[2] : ""}</td>` }, tbody);
+});
+function tryK() {
+  story.pause(); if (sweep) { sweep(); sweep = null; } clearTimeout(pending); // the slider takes over the animation stage
+  const K = +document.getElementById("k").value;
+  document.getElementById("k-out").textContent = `K = ${K}: ${params(K).toFixed(2)} B params`;
+  [...tbody.rows].forEach((tr) => (tr.style.background = +tr.dataset.k === K ? "var(--act-soft)" : ""));
+  paintGrid(K, "cut"); setTensors(K); show(tens, true); show(rr, true); reroute(K);
+}
+document.getElementById("k").addEventListener("input", tryK);
+</script>
+</body>
+</html>

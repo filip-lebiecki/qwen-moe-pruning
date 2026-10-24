@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Expert Explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+<style>
+  .explorer { display: grid; grid-template-columns: minmax(0, 360px) minmax(0, 1fr); gap: 18px; }
+  @media (max-width: 820px) { .explorer { grid-template-columns: minmax(0, 1fr); } }
+  .egrid { display: grid; grid-template-columns: repeat(16, 1fr); gap: 3px; }
+  .egrid button { aspect-ratio: 1; border: 0; border-radius: 3px; padding: 0; cursor: pointer; background: var(--grid); }
+  .egrid button[aria-pressed="true"] { outline: 2px solid var(--act); outline-offset: 1px; }
+  .egrid button.cut { opacity: 0.35; }
+  .detail { display: grid; gap: 10px; align-content: start; min-width: 0; }
+  .detail h3 { font-size: 1.1rem; }
+  .tokrow { display: grid; grid-template-columns: 9em minmax(0, 1fr) 4.5em; gap: 8px; align-items: center; font-size: 0.88rem; }
+  .tokrow .t { font-family: var(--f-mono); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+  .tokrow .bar { height: 12px; border-radius: 3px; background: var(--h); }
+  .tokrow .v { font-family: var(--f-mono); font-variant-numeric: tabular-nums; color: var(--ink2); text-align: right; }
+  .ctx { font: 400 0.82rem/1.5 var(--f-mono); background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ctx b { background: var(--act-soft); color: var(--ink); font-weight: 600; }
+  .pill { font: 600 0.72rem/1 var(--f-mono); padding: 4px 7px; border-radius: 999px; }
+  .pill.keep { background: var(--keep-soft); color: var(--keep); }
+  .pill.cut { background: var(--cut-soft); color: var(--cut); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Appendix G · inside the experts</div>
+    <h1>What does each expert handle?</h1>
+    <p class="lede">Nobody assigns experts a topic; specialities emerge in training. Here they are, measured: which tokens
+      each of the 10,240 experts received when 524k tokens of calibration text went through the original model.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="tG">
+    <h2 id="tG">Explore: pick a layer, click an expert</h2>
+    <div class="row">
+      <label for="gl">Layer <input id="gl" type="range" min="0" max="39" value="20"></label>
+      <span class="readout" id="gl-out"></span>
+      <label for="gcut"><input id="gcut" type="checkbox" checked> fade experts the 128-expert prune deleted</label>
+    </div>
+    <div class="explorer">
+      <div>
+        <div class="egrid" id="egrid" role="group" aria-label="256 experts"></div>
+        <p class="note">Colour strength = how specialised the expert is (its highest lift). Click one.</p>
+      </div>
+      <div class="detail" id="detail"></div>
+    </div>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p><b>Lift</b> = share of a token among the expert's tokens ÷ share of that token in all text. It finds what is
+      special about an expert instead of what is common everywhere. Tokens seen fewer than 20 times are ignored.</p>
+    <p>Specialities are real but partial: experts work in teams of 8 per token, one expert can serve several unrelated jobs,
+      and a token list shows correlation, not necessity. The causal test is to delete the expert and measure, which is what
+      pruning does, and <a href="i-ablation.html">appendix I</a> does it: one named expert alone changes almost nothing, a
+      team of 4 topic experts per layer costs its topic 25–51%. Most named specialists are rarely used, so they sit near the pruning cut: REAP rescues some (biology,
+      layer 20 · 241, from 229th to 2nd), but the 128-expert prune still deleted algebra, code comments and think/LaTeX.</p>
+  </section>
+
+  <section class="facts" aria-label="Facts">
+    <div class="fact"><span class="k">Routing recorded</span><span class="v">167 M picks</span><span class="n">40 layers x 524k tokens x 8</span></div>
+    <div class="fact"><span class="k">Median best lift</span><span class="v">25–30</span><span class="n">in every quarter of the model</span></div>
+    <div class="fact"><span class="k">Workload range</span><span class="v">60 – 211,626</span><span class="n">token-slots per expert</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">12_expert_tokens.py</span><span class="n">record_routing(), analyse()</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script src="g-experts-data.js"></script>
+<script src="d-specialist-data.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const bestLift = (l, e) => (EXPERTS[l][e].top.length ? EXPERTS[l][e].top[0][2] : 0);
+const kept128 = (l, e) => SPEC.rank_general[l][e] < 128;
+const vis = (t) => t.replace(/ /g, "␣").replace(/\n/g, "↵");
+
+/* ---------------- story ---------------- */
+const W = 960, HH = 450;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "How expert specialities are found");
+const groups = Array.from({ length: 6 }, () => S("g", { cls: "fade hide" }, svg));
+const [g0, g1, g2, g3, g4, g5] = groups;
+
+/* 0: tokens flow to experts */
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "step 1: record which 8 experts every token goes to" }, g0);
+const words = [" The", " cell", " membrane", " controls", " drug", " uptake", "."];
+words.forEach((w, k) => {
+  S("rect", { x: 30 + k * 110, y: 70, width: 100, height: 32, rx: 6, cls: "f-h-soft" }, g0);
+  S("text", { x: 80 + k * 110, y: 91, "text-anchor": "middle", "font-size": 13, cls: "t-mono", text: vis(w) }, g0);
+});
+const EXX = (e) => 30 + (e % 32) * 24, EXY = (e) => 200 + Math.floor(e / 32) * 24;
+const ecells = Array.from({ length: 256 }, (_, e) => S("rect", { x: EXX(e), y: EXY(e), width: 20, height: 20, rx: 3, cls: "f-grid" }, g0));
+S("text", { x: 30, y: 190, "font-size": 12, cls: "t-dim", text: "layer 20: 256 experts" }, g0);
+const links = S("g", {}, g0);
+S("text", { x: 30, y: 420, "font-size": 12.5, cls: "t-dim", text: "Real for layer 20: expert 241 (biology and medicine) is among the picks for \"membrane\" and \"drug\" much more often than for \"The\"." }, g0);
+
+/* 1: lift formula */
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "step 2: rank tokens by lift, not by count" }, g1);
+const L20 = EXPERTS[20][241];
+const byCount = [["␣the", "very common everywhere"], ["␣of", "very common everywhere"], [",", "very common everywhere"]];
+S("text", { x: 30, y: 80, "font-size": 13, "font-weight": 600, text: "by raw count, every expert looks the same:" }, g1);
+byCount.forEach(([t, n], k) => S("text", { x: 50, y: 108 + k * 22, "font-size": 12.5, cls: "t-mono t-dim", text: `${t}   ${n}` }, g1));
+S("text", { x: 30, y: 200, "font-size": 13, "font-weight": 600, text: "lift = share among the expert's tokens ÷ share in all text" }, g1);
+S("text", { x: 30, y: 226, "font-size": 12.5, cls: "t-dim", text: "layer 20, expert 241, real top tokens:" }, g1);
+L20.top.slice(0, 6).forEach(([t, c, lf], k) => {
+  const y = 250 + k * 26;
+  S("text", { x: 50, y: y + 13, "font-size": 12.5, cls: "t-mono", text: vis(t) }, g1);
+  S("rect", { x: 190, y: y + 2, width: Math.min(500, lf * 1.2), height: 14, rx: 3, cls: "f-h" }, g1);
+  S("text", { x: 196 + Math.min(500, lf * 1.2), y: y + 13, "font-size": 11.5, cls: "t-mono t-dim", text: `lift ${lf}  (${c}x)` }, g1);
+});
+
+/* 2: specialisation map of all layers */
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "every expert, every layer: how specialised (strongest lift, log scale)" }, g2);
+const lmax = Math.log(Math.max(...EXPERTS.flat().map((e) => (e.top.length ? e.top[0][2] : 1))));
+for (let l = 0; l < 40; l++) {
+  for (let e = 0; e < 256; e++) {
+    const r = S("rect", { x: 70 + e * 3.4, y: 52 + l * 9, width: 3, height: 8, fill: "var(--route)" }, g2);
+    r.style.fillOpacity = (Math.max(0, Math.log(Math.max(bestLift(l, e), 1))) / lmax).toFixed(3);
+  }
+  if (l % 5 === 0) S("text", { x: 62, y: 60 + l * 9, "text-anchor": "end", "font-size": 10, cls: "t-faint t-mono", text: l }, g2);
+}
+S("text", { x: 70, y: 430, "font-size": 12, cls: "t-dim", text: "rows = layers 0 (top) to 39, columns = experts 0–255. Specialists appear in every layer." }, g2);
+
+/* 3: a gallery of real specialists */
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "some specialists, from the real data" }, g3);
+const GAL = [[5, 39, "algebra"], [5, 50, "code comments"], [20, 97, "economics, environment"], [20, 241, "biology, medicine"], [20, 109, "people, relationships"], [35, 204, "reasoning tags, LaTeX"]];
+GAL.forEach(([l, e, name], k) => {
+  const x = 24 + (k % 3) * 312, y = 56 + Math.floor(k / 3) * 190;
+  S("rect", { x, y, width: 296, height: 172, rx: 8, cls: "box" }, g3);
+  S("text", { x: x + 14, y: y + 24, "font-size": 13, "font-weight": 600, text: `layer ${l} · expert ${e}` }, g3);
+  S("text", { x: x + 14, y: y + 42, "font-size": 12, cls: "t-act", text: name }, g3);
+  EXPERTS[l][e].top.slice(0, 5).forEach(([t, c, lf], j) => S("text", { x: x + 14, y: y + 68 + j * 20, "font-size": 12, cls: "t-mono", text: `${vis(t).padEnd(16)} lift ${lf}` }, g3));
+});
+
+/* 4: workload */
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "workloads are very uneven: token-slots per expert, all 10,240, sorted" }, g4);
+const loads = EXPERTS.flat().map((e) => e.n).sort((a, b) => b - a), lmx = Math.log10(loads[0]);
+let lpath = ""; loads.forEach((v, k) => { lpath += `${k ? "L" : "M"}${70 + (k / loads.length) * 820},${400 - (Math.log10(Math.max(v, 1)) / lmx) * 330} `; });
+S("path", { d: `M70,70 V400 H890`, cls: "wire" }, g4);
+S("path", { d: lpath, fill: "none", stroke: "var(--act)", "stroke-width": 2.4 }, g4);
+[10, 100, 1000, 10000, 100000].forEach((v) => S("text", { x: 62, y: 404 - (Math.log10(v) / lmx) * 330, "text-anchor": "end", "font-size": 10.5, cls: "t-faint t-mono", text: v.toLocaleString("en") }, g4));
+S("text", { x: 90, y: 90, "font-size": 12.5, text: `busiest: ${loads[0].toLocaleString("en")} (a generalist)` }, g4);
+S("text", { x: 880, y: 390, "text-anchor": "end", "font-size": 12.5, text: `quietest: ${loads[loads.length - 1]}` }, g4);
+S("text", { x: 480, y: 230, "font-size": 12.5, cls: "t-dim", text: `median ${loads[loads.length >> 1].toLocaleString("en")}` }, g4);
+
+/* 5: pruning and specialists */
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "specialists live near the pruning cut (rank among 256, lower = kept first)" }, g5);
+const PR = [["biology (20·241)", 229, 2], ["algebra (5·39)", 254, 145], ["code comments (5·50)", 255, 131], ["think/LaTeX (35·204)", 225, 174]];
+const RX = (r) => 260 + (r / 256) * 620;
+S("line", { x1: RX(128), x2: RX(128), y1: 60, y2: 360, stroke: "var(--cut)", "stroke-width": 2, "stroke-dasharray": "5 4" }, g5);
+S("text", { x: RX(128) + 6, y: 72, "font-size": 11.5, cls: "t-cut", text: "cut at 128" }, g5);
+PR.forEach(([name, fr, rp], k) => {
+  const y = 110 + k * 60;
+  S("text", { x: 24, y: y + 5, "font-size": 12.5, text: name }, g5);
+  S("line", { x1: RX(fr), x2: RX(rp), y1: y, y2: y, stroke: "var(--ink3)", "stroke-width": 1.5 }, g5);
+  S("circle", { cx: RX(fr), cy: y, r: 6, fill: "var(--h)" }, g5);
+  S("circle", { cx: RX(rp), cy: y, r: 6, fill: rp < 128 ? "var(--keep)" : "var(--act)" }, g5);
+});
+S("circle", { cx: 270, cy: 380, r: 6, fill: "var(--h)" }, g5); S("text", { x: 282, y: 384, "font-size": 12, cls: "t-dim", text: "rank by frequency" }, g5);
+S("circle", { cx: 450, cy: 380, r: 6, fill: "var(--act)" }, g5); S("text", { x: 462, y: 384, "font-size": 12, cls: "t-dim", text: "rank by REAP" }, g5);
+S("text", { x: 24, y: 420, "font-size": 12.5, cls: "t-dim", text: "REAP pulls specialists forward; only biology made it inside the cut. The 19 B prune deleted the other three." }, g5);
+
+let flow = null;
+const steps = [
+  { title: "Record the routing", text: "One streamed pass over 524k calibration tokens saves, for every token in every layer, the 8 experts its router picked: 167 million picks.", ms: 6500 },
+  { title: "Rank by lift, not by count", text: "By count, every expert's top tokens are \"the\", \"of\", \",\". Lift divides by how common a token is anyway, so what remains is what this expert gets unusually often." },
+  { title: "Specialists are everywhere", text: "Each dot is one expert; brighter = a stronger speciality. There is no layer without specialists; early layers follow words and topics, late layers follow structure." },
+  { title: "Some real specialists", text: "Algebra, code comments, economics, biology, people, and one that tracks the model's own thinking tags and LaTeX. Read them as hints; examples in context (below) show the real job." },
+  { title: "Very uneven workloads", text: "From a generalist that 40% of all tokens consult to specialists that see a few hundred tokens. Note the log scale." },
+  { title: "Specialists sit at the pruning cut", text: "Rarely used, so low by frequency. REAP lifts them because they matter when they fire, but most still land just below 128. That is where the 19 B prune lost its knowledge." },
+];
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    if (flow) { flow(); flow = null; }
+    groups.forEach((g, k) => show(g, k === i));
+    if (i === 0) {
+      const r = rng(3);
+      const special = { 2: 241, 4: 241 };
+      let k = 0;
+      const id = setInterval(() => {
+        clear(links); ecells.forEach((c) => c.setAttribute("class", "f-grid"));
+        const w = k % words.length; k++;
+        const picks = new Set();
+        if (special[w]) picks.add(special[w]);
+        while (picks.size < 8) picks.add(Math.floor(r() * 256));
+        picks.forEach((e) => {
+          ecells[e].setAttribute("class", e === 241 ? "f-route" : "f-act");
+          S("line", { x1: 80 + w * 110, y1: 102, x2: EXX(e) + 10, y2: EXY(e), stroke: e === 241 ? "var(--route)" : "var(--act)", "stroke-opacity": 0.5 }, links);
+        });
+      }, REDUCED ? 100000 : 900);
+      flow = () => clearInterval(id);
+    }
+  },
+});
+
+/* ---------------- explorer ---------------- */
+const grid = document.getElementById("egrid"), detail = document.getElementById("detail");
+const btns = Array.from({ length: 256 }, (_, e) => H("button", { type: "button", "aria-label": `expert ${e}`, onclick: () => pick(e) }, grid));
+let layer = 20, chosen = 241;
+function paintGrid() {
+  const fade = document.getElementById("gcut").checked;
+  btns.forEach((b, e) => {
+    const lf = bestLift(layer, e);
+    b.style.background = `color-mix(in oklab, var(--route) ${Math.round(100 * Math.min(1, Math.log(Math.max(lf, 1)) / lmax))}%, var(--grid))`;
+    b.classList.toggle("cut", fade && !kept128(layer, e));
+    b.setAttribute("aria-pressed", e === chosen ? "true" : "false");
+  });
+  const nk = btns.filter((_, e) => kept128(layer, e)).length;
+  document.getElementById("gl-out").textContent = `layer ${layer} · ${nk} of 256 kept by the 128-expert prune`;
+}
+function pick(e) {
+  chosen = e; paintGrid();
+  const x = EXPERTS[layer][e];
+  clear(detail);
+  const head = H("h3", { html: `Layer ${layer} · expert ${e} <span class="pill ${kept128(layer, e) ? "keep" : "cut"}">${kept128(layer, e) ? "kept at K=128" : "deleted at K=128"}</span>` }, detail);
+  void head;
+  H("span", { cls: "note", text: `${x.n.toLocaleString("en")} token-slots routed here · REAP rank ${SPEC.rank_general[layer][e] + 1} of 256` }, detail);
+  if (!x.top.length) { H("p", { text: "No token reached 20 occurrences: too rarely used to read." }, detail); return; }
+  const mx = x.top[0][2];
+  x.top.forEach(([t, c, lf]) => {
+    const row = H("div", { cls: "tokrow" }, detail);
+    H("span", { cls: "t", text: vis(t), title: t }, row);
+    const bw = H("div", {}, row); H("div", { cls: "bar", style: { width: `${Math.max(4, (lf / mx) * 100)}%` } }, bw);
+    H("span", { cls: "v", text: `${lf}×` }, row);
+  });
+  H("span", { cls: "note", text: "lift (bar) · each token appeared at least 20 times among this expert's tokens" }, detail);
+  if (x.examples) {
+    H("strong", { text: "its top tokens in context" }, detail);
+    x.examples.forEach(([a, tkn, b]) => { const d = H("div", { cls: "ctx" }, detail); d.appendChild(document.createTextNode(a)); H("b", { text: tkn }, d); d.appendChild(document.createTextNode(b)); });
+  } else {
+    H("span", { cls: "note", text: "No examples: none of its top tokens occurred often enough." }, detail);
+  }
+}
+document.getElementById("gl").addEventListener("input", (ev) => { layer = +ev.target.value; const best = [...Array(256).keys()].sort((a, b) => bestLift(layer, b) - bestLift(layer, a))[0]; pick(best); });
+document.getElementById("gcut").addEventListener("change", paintGrid);
+pick(241);
+</script>
+</body>
+</html>

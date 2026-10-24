@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>REAP Expert Scoring</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Chapter 6</div>
+    <h1>Choosing which experts to keep: REAP</h1>
+    <p class="lede">"Used often" and "important" are not the same thing. REAP scores an expert by how much it changes the
+      output on the tokens it handles, and in our runs it beat counting usage at every K.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="try6">
+    <h2 id="try6">Try it: compare criteria</h2>
+    <div class="row">
+      <label for="k6">Keep K <input id="k6" type="range" min="8" max="248" step="8" value="128"></label>
+      <span class="readout" id="k6-out"></span>
+    </div>
+    <div class="row" role="radiogroup" aria-label="Criterion">
+      <label><input type="radio" name="crit" value="reap" checked> REAP</label>
+      <label><input type="radio" name="crit" value="freq"> frequency</label>
+      <label><input type="radio" name="crit" value="random"> random</label>
+    </div>
+    <div class="stage" id="sc-stage"></div>
+    <p class="note">Illustrative layer with 256 experts, generated so that REAP and frequency agree on 73% of the kept
+      experts at K = 128, as they did on average in the real statistics. Real agreement at K = 48 was 45%.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p>For every token routed to expert <i>j</i>, its contribution to the output is <code>g_j(x) · E_j(x)</code>: the
+      routing weight times the expert's output vector. Its size is <code>g_j(x) · ‖E_j(x)‖</code>. REAP averages that
+      over the tokens the expert actually handled:</p>
+    <p><code>REAP_j = mean over tokens routed to j of g_j(x) · ‖E_j(x)‖</code></p>
+    <p>Removing an expert with a small REAP score changes little, because whenever it fired its weighted contribution was
+      small anyway. Frequency keeps "background" experts that are added to many tokens as a minor ingredient. REAP keeps
+      specialists that dominate the few tokens they handle. Paper: <i>REAP the Experts: Why Pruning Prevails for One-Shot
+      MoE Compression</i> (Cerebras, 2025).</p>
+  </section>
+
+  <section class="facts" aria-label="In this project">
+    <div class="fact"><span class="k">K = 128 perplexity</span><span class="v">5.92 / 6.47 / 7.93</span><span class="n">REAP / frequency / random</span></div>
+    <div class="fact"><span class="k">K = 48 perplexity</span><span class="v">11.7 / 14.6 / 20.3</span><span class="n">REAP / frequency / random</span></div>
+    <div class="fact"><span class="k">Agreement with REAP</span><span class="v">73% at K=128</span><span class="n">frequency picks; 45% at K=48</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">expert_scores()</span><span class="n">reap = reap_sum / freq</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+/* synthetic layer: correlation tuned so top-128 overlap ≈ 73% */
+const Z = (() => { const r = rng(2025); return Array.from({ length: 256 }, () => [gauss(r), gauss(r)]); })();
+function makeLayer(rho) {
+  return Z.map(([a, b]) => ({ f: Math.exp(0.55 * a), s: Math.exp(0.6 * (rho * a + Math.sqrt(1 - rho * rho) * b)) }));
+}
+function topSet(arr, key, K) { return new Set(arr.map((d, e) => [d[key], e]).sort((x, y) => y[0] - x[0]).slice(0, K).map(([, e]) => e)); }
+function overlap(arr, K) { const a = topSet(arr, "f", K), b = topSet(arr, "s", K); let n = 0; a.forEach((e) => b.has(e) && n++); return n / K; }
+let best = [1, 0];
+for (let rho = 0; rho <= 1; rho += 0.01) { const o = overlap(makeLayer(rho), 128); if (Math.abs(o - 0.73) < best[0]) best = [Math.abs(o - 0.73), rho]; }
+const EXP = makeLayer(best[1]);
+const rnd = (() => { const r = rng(99); return EXP.map(() => r()); })();
+EXP.forEach((d, e) => (d.r = rnd[e]));
+// A: popular but weak, B: rare but strong
+const byGap = EXP.map((d, e) => [Math.log(d.f) - Math.log(d.s), e]).sort((x, y) => y[0] - x[0]);
+const A = byGap[0][1], B = byGap[255][1];
+
+const W = 960, HH = 470;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "REAP versus frequency for choosing experts");
+
+/* left: worked example */
+const ex = S("g", { cls: "fade" }, svg);
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "per routed token we record g and ‖E(x)‖" }, ex);
+function exampleCol(x, name, cls, rows, freq, avgG, avgN) {
+  const g = S("g", { cls: "fade" }, ex);
+  S("text", { x, y: 66, "font-size": 13, "font-weight": 600, cls, text: name }, g);
+  ["g", "‖E(x)‖", "g·‖E‖"].forEach((h, k) => S("text", { x: x + k * 62, y: 86, "font-size": 10.5, cls: "t-faint t-mono", text: h }, g));
+  const lines = rows.map(([gv, nv], k) => {
+    const y = 106 + k * 20, t = [];
+    t.push(S("text", { x, y, "font-size": 12, cls: "t-mono", text: gv.toFixed(2) }, g));
+    t.push(S("text", { x: x + 62, y, "font-size": 12, cls: "t-mono", text: nv.toFixed(2) }, g));
+    t.push(S("text", { x: x + 124, y, "font-size": 12, cls: "t-mono " + cls, text: (gv * nv).toFixed(3) }, g));
+    return t;
+  });
+  S("text", { x, y: 106 + rows.length * 20 + 4, "font-size": 12, cls: "t-dim", text: "…" }, g);
+  const sum = S("g", { cls: "fade hide" }, g);
+  S("text", { x, y: 230, "font-size": 12, text: `freq = ${freq.toLocaleString("en")} tokens` }, sum);
+  S("text", { x, y: 250, "font-size": 12, text: `avg g = ${avgG}, avg ‖E‖ = ${avgN}` }, sum);
+  S("text", { x, y: 276, "font-size": 15, "font-weight": 700, cls, text: `REAP = ${(avgG * avgN).toFixed(3)}` }, sum);
+  return { g, lines, sum };
+}
+const colA = exampleCol(24, "expert A", "t-h", [[0.04, 0.18], [0.06, 0.22], [0.05, 0.19], [0.05, 0.21], [0.05, 0.2]], 10000, 0.05, 0.2);
+const colB = exampleCol(226, "expert B", "t-act", [[0.31, 0.52], [0.28, 0.47], [0.3, 0.5], [0.33, 0.49], [0.28, 0.52]], 1000, 0.3, 0.5);
+const verdict = S("g", { cls: "fade hide" }, ex);
+S("text", { x: 24, y: 320, "font-size": 12.5, text: "frequency says A is 10x more important." }, verdict);
+S("text", { x: 24, y: 340, "font-size": 12.5, text: "REAP says B matters 15x more when it is used." }, verdict);
+S("text", { x: 24, y: 366, "font-size": 11.5, cls: "t-dim", text: "A: a minor ingredient added to many tokens." }, verdict);
+S("text", { x: 24, y: 384, "font-size": 11.5, cls: "t-dim", text: "B: a specialist that dominates its tokens." }, verdict);
+
+/* right: scatter */
+const P = { x: 470, y: 50, w: 460, h: 330 };
+const sc = S("g", { cls: "fade hide" }, svg);
+S("rect", { x: P.x, y: P.y, width: P.w, height: P.h, rx: 6, cls: "box-soft" }, sc);
+S("text", { x: P.x + P.w, y: P.y + P.h + 20, "text-anchor": "end", "font-size": 12, cls: "t-dim", text: "frequency (tokens routed) →" }, sc);
+S("text", { x: P.x - 8, y: P.y + 12, "text-anchor": "end", "font-size": 12, cls: "t-dim", text: "REAP ↑" }, sc);
+const fmax = Math.log(Math.max(...EXP.map((d) => d.f))), fmin = Math.log(Math.min(...EXP.map((d) => d.f)));
+const smax = Math.log(Math.max(...EXP.map((d) => d.s))), smin = Math.log(Math.min(...EXP.map((d) => d.s)));
+const px = (d) => P.x + 12 + ((Math.log(d.f) - fmin) / (fmax - fmin)) * (P.w - 24);
+const py = (d) => P.y + P.h - 12 - ((Math.log(d.s) - smin) / (smax - smin)) * (P.h - 24);
+const dots = EXP.map((d) => S("circle", { cx: px(d), cy: py(d), r: 4.2, cls: "fade", fill: "var(--ink3)" }, sc));
+const vline = S("line", { y1: P.y, y2: P.y + P.h, stroke: "var(--h)", "stroke-width": 2, "stroke-dasharray": "5 4", cls: "fade hide" }, sc);
+const hline = S("line", { x1: P.x, x2: P.x + P.w, stroke: "var(--act)", "stroke-width": 2, "stroke-dasharray": "5 4", cls: "fade hide" }, sc);
+const labA = S("text", { x: px(EXP[A]) - 8, y: py(EXP[A]) + 18, "text-anchor": "end", "font-size": 12, "font-weight": 700, cls: "t-h", text: "A" }, sc);
+const labB = S("text", { x: px(EXP[B]) + 8, y: py(EXP[B]) - 8, "font-size": 12, "font-weight": 700, cls: "t-act", text: "B" }, sc);
+const scNote = S("text", { x: P.x, y: P.y - 22, "font-size": 12, cls: "t-mono", text: "" }, sc);
+const scNote2 = S("text", { x: P.x, y: P.y - 6, "font-size": 11.5, cls: "t-dim", text: "" }, sc);
+
+/* results chart */
+const RES = { x: 470, y: 40, w: 460, h: 340 };
+const res = S("g", { cls: "fade hide" }, svg);
+S("rect", { x: RES.x, y: RES.y, width: RES.w, height: RES.h, rx: 6, cls: "box" }, res);
+S("text", { x: RES.x + 16, y: RES.y + 26, "font-size": 13, "font-weight": 600, text: "measured perplexity (lower is better)" }, res);
+const DATA = [["K = 128", [["REAP", 5.92, "f-act"], ["frequency", 6.47, "f-h"], ["random", 7.93, "f-ink3"]]], ["K = 48", [["REAP", 11.7, "f-act"], ["frequency", 14.6, "f-h"], ["random", 20.3, "f-ink3"]]]];
+const resBars = [];
+const scale = (v) => (v / 21) * (RES.w - 170);
+DATA.forEach(([grp, rows], gi) => {
+  const y0 = RES.y + 60 + gi * 140;
+  S("text", { x: RES.x + 16, y: y0, "font-size": 12.5, "font-weight": 600, text: grp }, res);
+  rows.forEach(([name, v, cls], k) => {
+    const y = y0 + 14 + k * 34;
+    S("text", { x: RES.x + 16, y: y + 15, "font-size": 12, cls: "t-dim", text: name }, res);
+    const b = S("rect", { x: RES.x + 96, y, width: 0, height: 22, rx: 3, cls }, res);
+    const t = S("text", { x: RES.x + 96 + scale(v) + 6, y: y + 16, "font-size": 12, cls: "t-mono", "font-weight": 600, text: v.toFixed(2) }, res);
+    resBars.push([b, v, t]);
+  });
+});
+const base = RES.x + 96 + scale(4.92);
+S("line", { x1: base, x2: base, y1: RES.y + 44, y2: RES.y + RES.h - 30, stroke: "var(--keep)", "stroke-width": 1.6, "stroke-dasharray": "4 3" }, res);
+S("text", { x: base + 4, y: RES.y + RES.h - 14, "font-size": 11, cls: "t-keep", text: "original 4.92" }, res);
+
+function colorBy(mode, K) {
+  const fset = topSet(EXP, "f", K), sset = topSet(EXP, "s", K), rset = topSet(EXP, "r", K);
+  dots.forEach((d, e) => {
+    let c = "var(--ink3)", o = 0.55;
+    if (mode === "freq") { c = fset.has(e) ? "var(--keep)" : "var(--cut)"; o = 0.85; }
+    if (mode === "reap") { c = sset.has(e) ? "var(--keep)" : "var(--cut)"; o = 0.85; }
+    if (mode === "random") { c = rset.has(e) ? "var(--keep)" : "var(--cut)"; o = 0.85; }
+    if (mode === "both") { const a = fset.has(e), b = sset.has(e); c = a && b ? "var(--keep)" : a ? "var(--h)" : b ? "var(--act)" : "var(--line)"; o = 0.9; }
+    d.style.fill = c; d.style.opacity = o;
+  });
+  const fsort = EXP.map((d) => d.f).sort((a, b) => b - a), ssort = EXP.map((d) => d.s).sort((a, b) => b - a);
+  const fx = px({ f: (fsort[K - 1] + fsort[K]) / 2 || fsort[K - 1] }), sy = py({ s: (ssort[K - 1] + ssort[K]) / 2 || ssort[K - 1] });
+  vline.setAttribute("x1", fx); vline.setAttribute("x2", fx);
+  hline.setAttribute("y1", sy); hline.setAttribute("y2", sy);
+  show(vline, mode === "freq" || mode === "both"); show(hline, mode === "reap" || mode === "both");
+  return overlap(EXP, K);
+}
+
+const steps = [
+  { title: "What we record for every expert", text: "03_expert_stats.py runs 524k tokens through the model. For every token routed to an expert, we know its routing weight g and the size of the expert's output ‖E(x)‖." },
+  { title: "Two experts, two stories", text: "Expert A is picked by 10,000 tokens but always with a tiny weight and a small output. Expert B is picked by only 1,000 tokens, but with a big weight and a big output.", ms: 6500 },
+  { title: "REAP = average of g · ‖E‖", text: "A: 0.05 x 0.2 = 0.010. B: 0.30 x 0.5 = 0.150. When B is used, it shapes the result; A barely moves it.", ms: 6500 },
+  { title: "Every expert is one dot", text: "Frequency to the right, REAP score upwards (both on a log scale). A sits bottom right, B top left." },
+  { title: "Keep by frequency", text: "Keep the 128 most used experts: everything right of the blue line. A survives, B is deleted." },
+  { title: "Keep by REAP", text: "Keep the 128 highest REAP scores: everything above the amber line. B survives, A is deleted." },
+  { title: "They disagree on about a quarter", text: "Teal: both keep it. Blue: only frequency. Amber: only REAP. In the real statistics the two choices overlapped by 73% at K=128 and only 45% at K=48." },
+  { title: "Which choice is better? Measure it", text: "Same K, three criteria, held-out perplexity. REAP wins clearly at both sizes, and random shows how much the criterion matters at all.", ms: 7000 },
+];
+
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    show(colA.g, i >= 1); show(colB.g, i >= 1); show(colA.sum, i >= 2); show(colB.sum, i >= 2); show(verdict, i >= 2);
+    show(sc, i >= 3 && i <= 6); show(res, i === 7);
+    show(labA, true); show(labB, true);
+    scNote.textContent = ""; scNote2.textContent = "";
+    if (i === 3) colorBy("none", 128);
+    if (i === 4) { colorBy("freq", 128); scNote.textContent = "keep top 128 by frequency"; scNote2.textContent = "teal kept, red deleted"; }
+    if (i === 5) { colorBy("reap", 128); scNote.textContent = "keep top 128 by REAP"; scNote2.textContent = "teal kept, red deleted"; }
+    if (i === 6) { const o = colorBy("both", 128); scNote.textContent = `agree on ${(o * 100).toFixed(0)}% of the kept experts`; scNote2.textContent = "teal both · blue only freq · amber only REAP"; }
+    resBars.forEach(([b, v]) => animAttrs(b, { width: i === 7 ? scale(v) : 0 }, 900));
+  },
+});
+
+/* try it */
+const ts = document.getElementById("sc-stage");
+const tsv = svgRoot(ts, 760, 300, "Scatter of experts with kept ones highlighted");
+const Q = { x: 20, y: 14, w: 520, h: 270 };
+S("rect", { x: Q.x, y: Q.y, width: Q.w, height: Q.h, rx: 6, cls: "box-soft" }, tsv);
+const qx = (d) => Q.x + 10 + ((Math.log(d.f) - fmin) / (fmax - fmin)) * (Q.w - 20);
+const qy = (d) => Q.y + Q.h - 10 - ((Math.log(d.s) - smin) / (smax - smin)) * (Q.h - 20);
+const qd = EXP.map((d) => S("circle", { cx: qx(d), cy: qy(d), r: 3.6 }, tsv));
+S("text", { x: Q.x + Q.w, y: Q.y + Q.h + 14, "text-anchor": "end", "font-size": 11, cls: "t-dim", text: "frequency →" }, tsv);
+const out1 = S("text", { x: 570, y: 40, "font-size": 13, cls: "t-mono", text: "" }, tsv);
+const out2 = S("text", { x: 570, y: 64, "font-size": 13, cls: "t-mono", text: "" }, tsv);
+const out3 = S("text", { x: 570, y: 88, "font-size": 13, cls: "t-mono", text: "" }, tsv);
+const out4 = S("text", { x: 570, y: 124, "font-size": 12, cls: "t-dim", text: "" }, tsv);
+function tryIt() {
+  const K = +document.getElementById("k6").value, crit = document.querySelector('input[name="crit"]:checked').value;
+  document.getElementById("k6-out").textContent = `K = ${K}`;
+  const key = { reap: "s", freq: "f", random: "r" }[crit];
+  const kept = topSet(EXP, key, K), reapSet = topSet(EXP, "s", K);
+  qd.forEach((d, e) => { d.style.fill = kept.has(e) ? "var(--keep)" : "var(--cut)"; d.style.opacity = kept.has(e) ? 0.9 : 0.45; });
+  let agree = 0; kept.forEach((e) => reapSet.has(e) && agree++);
+  // "REAP mass kept": share of total REAP·freq contribution that survives
+  const tot = EXP.reduce((a, d) => a + d.s * d.f, 0);
+  const keptMass = [...kept].reduce((a, e) => a + EXP[e].s * EXP[e].f, 0);
+  out1.textContent = `kept ${K}, deleted ${256 - K}`;
+  out2.textContent = `agrees with REAP: ${((agree / K) * 100).toFixed(0)}%`;
+  out3.textContent = `contribution kept: ${((keptMass / tot) * 100).toFixed(1)}%`;
+  out4.textContent = "contribution = Σ freq x REAP (total g·‖E‖)";
+}
+document.getElementById("k6").addEventListener("input", tryIt);
+document.querySelectorAll('input[name="crit"]').forEach((r) => r.addEventListener("change", tryIt));
+tryIt();
+</script>
+</body>
+</html>

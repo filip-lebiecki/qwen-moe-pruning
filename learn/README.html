@@ -1,0 +1,2119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Expert pruning Qwen3.5-35B-A3B (MoE) on one 16 GB GPU</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="common.css">
+<style>
+  /* Document layout: sticky contents rail + one reading column. Tokens come from common.css. */
+  .page { max-width: 1180px; margin: 0 auto; display: grid; gap: 32px; }
+  .hero { display: grid; gap: 14px; padding-bottom: 8px; }
+  .hero h1 { font-size: clamp(1.9rem, 4.5vw, 2.8rem); max-width: 22ch; }
+  .glance { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .glance div { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; display: grid; gap: 2px; min-width: 0; }
+  .glance .k { font: 500 0.72rem/1.2 var(--f-mono); color: var(--ink3); text-transform: uppercase; letter-spacing: 0.07em; }
+  .glance .v { font: 650 1.35rem/1.25 var(--f-display); font-variant-numeric: tabular-nums; }
+  .glance .n { font-size: 0.85rem; color: var(--ink2); }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 40px; }
+  @media (min-width: 1000px) { .layout { grid-template-columns: 240px minmax(0, 1fr); } }
+  nav.contents { font-size: 0.88rem; min-width: 0; }
+  @media (min-width: 1000px) { nav.contents { position: sticky; top: 20px; align-self: start; max-height: calc(100vh - 40px); overflow-y: auto; } }
+  nav.contents .label { font: 600 0.72rem/1 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink3); margin-bottom: 10px; }
+  nav.contents ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+  nav.contents ol ol { padding-left: 12px; margin: 2px 0 6px; border-left: 1px solid var(--line); }
+  nav.contents a { display: block; padding: 3px 8px; border-radius: 5px; color: var(--ink2); text-decoration: none; line-height: 1.35; }
+  nav.contents a:hover { color: var(--ink); background: var(--grid); }
+  nav.contents a.on { color: var(--h); background: var(--h-soft); }
+  nav.contents .learn { margin-top: 16px; display: block; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); text-decoration: none; background: var(--panel); }
+  nav.contents .learn:hover { border-color: var(--h); }
+  @media (max-width: 999px) { nav.contents { border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); padding: 14px; } }
+
+  article { max-width: 78ch; min-width: 0; }
+  article p code, article li code, article td code { overflow-wrap: anywhere; }
+  article > * { margin: 0 0 14px; }
+  article h2 { font-size: 1.65rem; margin-top: 30px; padding-top: 22px; border-top: 1px solid var(--line); scroll-margin-top: 16px; }
+  article h3 { font-size: 1.22rem; margin-top: 22px; scroll-margin-top: 16px; }
+  article p, article li { line-height: 1.65; }
+  article ul, article ol { padding-left: 1.3em; }
+  article li + li { margin-top: 6px; }
+  article hr { display: none; }
+  article strong { font-weight: 600; }
+  article pre { position: relative; margin: 0 0 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow-x: auto; }
+  article pre code { background: none; padding: 0; font-size: 0.82rem; line-height: 1.55; white-space: pre; display: block; }
+  article pre.cmd { background: var(--grid); padding-top: 40px; }
+  article pre .copy { position: absolute; top: 8px; right: 8px; font: 500 0.75rem/1 var(--f-body); padding: 6px 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink2); cursor: pointer; }
+  article pre .copy:hover { color: var(--ink); border-color: var(--ink3); }
+  article .tablewrap { margin: 0 0 16px; }
+  article table.data td:first-child { white-space: nowrap; }
+  article table.data td, article table.data th { vertical-align: top; }
+  a.chip { display: inline-flex; gap: 6px; align-items: center; font: 500 0.82rem/1 var(--f-body); color: var(--h); background: var(--h-soft); border-radius: 999px; padding: 7px 12px; text-decoration: none; margin: -4px 0 14px; }
+  a.chip:hover { filter: brightness(0.97); }
+  footer { border-top: 1px solid var(--line); padding-top: 16px; font-size: 0.85rem; color: var(--ink3); }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="hero">
+    <div class="eyebrow">Learning project · Mixture-of-Experts pruning</div>
+    <h1>Expert pruning Qwen3.5-35B-A3B (MoE) on one 16 GB GPU</h1>
+    <div class="glance"><div><span class="k">Code specialist (run 3)</span><span class="v">8.9 B · 4.9 GB</span><span class="n">HumanEval 87% (original 96%)</span></div><div><span class="k">Parameters</span><span class="v">35 B → 19 B</span><span class="n">256 → 128 experts per layer</span></div><div><span class="k">File size</span><span class="v">67 GiB → 11 GiB</span><span class="n">BF16 → Q4_K_M</span></div><div><span class="k">Perplexity</span><span class="v">4.92 → 5.92</span><span class="n">held-out mix, lower is better</span></div><div><span class="k">Speed</span><span class="v">~190 tok/s</span><span class="n">RTX 5070 Ti, fully on the GPU</span></div><div><span class="k">Best for 16 GB (step 4)</span><span class="v">35 B · 12.2 GiB</span><span class="n">unpruned at 3 bits: 92.2 vs 92.9 avg</span></div></div>
+  </header>
+  <div class="layout">
+    <nav class="contents" aria-label="Contents">
+      <div class="label">Contents</div>
+      <ol><li><a href="#concepts-from-scratch">Concepts from scratch</a><ol><li><a href="#1-tokens-and-hidden-states">1. Tokens and hidden states</a></li><li><a href="#2-layers">2. Layers</a></li><li><a href="#3-experts-and-mixture-of-experts-moe">3. Experts and Mixture of Experts (MoE)</a></li><li><a href="#4-the-router">4. The router</a></li><li><a href="#5-what-pruning-experts-does">5. What &quot;pruning experts&quot; does</a></li><li><a href="#6-choosing-which-experts-to-keep-reap-and-the-alternatives">6. Choosing which experts to keep: REAP and the alternatives</a></li><li><a href="#7-calibration-data">7. Calibration data</a></li><li><a href="#8-perplexity-how-we-measure-damage">8. Perplexity: how we measure damage</a></li><li><a href="#9-distillation-and-healing">9. Distillation and &quot;healing&quot;</a></li><li><a href="#10-quantization-gguf-q4_k_m-and-iq4_xs">10. Quantization, GGUF, Q4_K_M and IQ4_XS</a></li><li><a href="#11-the-importance-matrix-imatrix">11. The importance matrix (imatrix)</a></li><li><a href="#12-other-names-you-will-meet">12. Other names you will meet</a></li><li><a href="#13-attention-deltanet-and-the-kv-cache">13. Attention, DeltaNet and the KV cache</a></li><li><a href="#14-number-formats-fp32-fp16-bf16-and-integers">14. Number formats</a></li><li><a href="#15-what-sets-the-speed">15. What sets the speed</a></li><li><a href="#16-from-probabilities-to-text">16. Sampling and chat templates</a></li></ol></li><li><a href="#where-the-parameters-are">Where the parameters are</a></li><li><a href="#walkthrough-run-2-keep-128-experts-exact-commands-timings-on-this-machine">Walkthrough: run 2, keep 128 experts (exact commands, timings on this machine)</a></li><li><a href="#results-held-out-perplexity-lower-is-better">Results (held-out perplexity, lower is better)</a></li><li><a href="#run-2-keep-128-quantization-cost-and-generation-test">Run 2 (keep 128): quantization cost and generation test</a></li><li><a href="#run-1-keep-48-generation-test-llama-server-q4_k_m-180-toks-on-the-5070-ti">Run 1 (keep 48): generation test (llama-server, Q4_K_M, ~180 tok/s on the 5070 Ti)</a></li><li><a href="#run-3-a-code-specialist-at-89-b">Run 3: a code specialist at 8.9 B</a><ol><li><a href="#run-3-code-perplexity">Code perplexity</a></li><li><a href="#run-3-graded-test">Graded coding test</a></li></ol></li><li><a href="#step-2-benchmarking">Step 2: benchmarking</a><ol><li><a href="#gsm8k">GSM8K</a></li><li><a href="#humaneval">HumanEval</a></li><li><a href="#mmlu">MMLU</a></li><li><a href="#how-to-benchmark">How to benchmark a model</a></li><li><a href="#what-to-look-for">What to look for</a></li><li><a href="#step-2-results">Results</a></li></ol></li><li><a href="#step-3-distillation">Step 3: distillation</a><ol><li><a href="#training-basics">Training in five minutes</a></li><li><a href="#distill-what">What is trained</a></li><li><a href="#distill-targets">Soft targets</a></li><li><a href="#distill-backward">Streamed backpropagation</a></li><li><a href="#distill-gradcheck">Verifying the gradient</a></li><li><a href="#distill-benefits">Benefits, costs and limits</a></li><li><a href="#step-3-results">Results</a></li></ol></li><li><a href="#inside-the-experts">Inside the experts</a><ol><li><a href="#experts-how">How to find a speciality</a></li><li><a href="#experts-found">What we found</a></li><li><a href="#experts-caveats">Reading carefully</a></li><li><a href="#experts-pruning">What it means for pruning</a></li></ol></li><li><a href="#k-per-layer">A different K per layer</a></li><li><a href="#step-4-quantization-curve">Step 4: the quantization curve</a><ol><li><a href="#quant-types">The types, decoded</a></li><li><a href="#quant-measure">Four measurements</a></li><li><a href="#quant-how">How it was run</a></li><li><a href="#step-4-results">Results</a></li><li><a href="#quant-findings">What the numbers say</a></li><li><a href="#quant-choose">Choosing a file for your GPU</a></li></ol></li><li><a href="#step-5-ablation-merging">Step 5: ablation and merging</a><ol><li><a href="#ablate-method">Deleting one expert</a></li><li><a href="#ablate-determinism">Exact measurement</a></li><li><a href="#ablate-results">Single experts</a></li><li><a href="#ablate-teams">Teams</a></li><li><a href="#merge-method">Merging</a></li><li><a href="#merge-results">Delete or merge?</a></li></ol></li><li><a href="#step-6-practical">Step 6: Hugging Face to your GPU</a><ol><li><a href="#hf-basics">Downloading</a></li><li><a href="#gguf-make">Any model to GGUF</a></li><li><a href="#run-well">Running it well</a></li><li><a href="#upload">Publishing</a></li><li><a href="#move-wsl">Moving WSL</a></li></ol></li><li><a href="#step-7-speculative">Step 7: speculative decoding</a><ol><li><a href="#spec-kinds">Three ways to draft</a></li><li><a href="#spec-results">Measured</a></li></ol></li><li><a href="#what-this-taught">What this taught</a></li><li><a href="#disk-now">Disk (now)</a></li></ol>
+      <a class="learn" href="index.html"><b>Animated notes</b><br><span class="note">16 interactive chapters</span></a>
+      <a class="learn" href="start.html"><b>Start here</b><br><span class="note">learning path + cheat sheet</span></a>
+    </nav>
+    <article>
+<p>Learning project: shrink <code>Qwen/Qwen3.5-35B-A3B</code> (256 routed experts per layer, top-8) by
+<strong>removing experts</strong>, <strong>quantize</strong> it to GGUF for llama.cpp, <strong>benchmark</strong> it against
+the original, and try to win quality back with <strong>distillation</strong>, all on one 16 GB GPU.</p>
+<ul>
+<li><strong>Run 1</strong>: keep 48 experts → 8.9 B. Runs, but broken for general use (<a href="#run-1-keep-48-generation-test-llama-server-q4_k_m-180-toks-on-the-5070-ti">run 1</a>).</li>
+<li><strong>Run 2</strong>: keep 128 experts → 19 B, 11 GB at Q4, fits the GPU (<a href="#walkthrough-run-2-keep-128-experts-exact-commands-timings-on-this-machine">the walkthrough</a>).</li>
+<li><strong>Run 3</strong>: calibrate on code only, keep 48 → an 8.9 B code specialist, 4.9 GB at Q4 (<a href="#run-3-a-code-specialist-at-89-b">run 3</a>).</li>
+<li><strong>Step 2</strong>: GSM8K, HumanEval and MMLU for every model against the unpruned original (<a href="#step-2-benchmarking">benchmarking</a>).</li>
+<li><strong>Step 3</strong>: end-to-end distillation of the routers, streamed through a GPU too small for the model (<a href="#step-3-distillation">distillation</a>).</li>
+<li><strong>Experiments</strong>: what each expert specialises in, and whether a different K per layer helps (<a href="#inside-the-experts">inside the experts</a>, <a href="#k-per-layer">K per layer</a>).</li>
+<li><strong>Step 4</strong>: the quantization curve, 8 bits down to 2, and the 35 B against the 19 B at the same file size (<a href="#step-4-quantization-curve">step 4</a>).</li>
+<li><strong>Step 5</strong>: delete single experts and whole domain teams to test whether specialisation is causal, and merge dropped experts instead of deleting them (<a href="#step-5-ablation-merging">step 5</a>).</li>
+<li><strong>Step 6</strong>: the practical workflow for any model: download, convert, quantize and check, run one bigger than the GPU, publish (<a href="#step-6-practical">step 6</a>).</li>
+<li><strong>Step 7</strong>: speculative decoding with the model's own MTP head, a draft model and n-gram lookup (<a href="#step-7-speculative">step 7</a>).</li>
+</ul>
+<p>Hardware: RTX 5070 Ti 16 GB, 32 GB RAM, WSL2 Ubuntu 24.04, ~150 GB free disk.
+The 67 GiB BF16 model never has to fit in memory: every step streams it one
+decoder layer (~1.7 GB) at a time (<code>scripts/moe_stream.py</code>).</p>
+<p><strong>Animated notes:</strong> open <a href="index.html"><code>learn/index.html</code></a> in a browser: one interactive
+page per concept section below (16 chapters, step-by-step animations plus a "Try it" panel each) and ten appendices:
+<a href="a-options.html">A · ways to shrink a model</a>, <a href="b-answers.html">B · real answers compared</a>,
+<a href="c-code.html">C · code tour and bugs</a>, <a href="d-specialist.html">D · specialist pruning</a>,
+<a href="e-benchmark.html">E · benchmarking</a>, <a href="f-training.html">F · training</a>,
+<a href="g-experts.html">G · inside the experts</a>, <a href="h-quant.html">H · the quantization curve</a>, <a href="i-ablation.html">I · ablation and merging</a>, <a href="j-practical.html">J · from Hugging Face to your GPU</a>. They use this project's real numbers wherever they exist.</p>
+<p>Contents:</p>
+<ol>
+<li><a href="#concepts-from-scratch">Concepts from scratch</a>: tokens, layers, experts, router,
+   pruning, REAP, calibration, perplexity, distillation, quantization, imatrix; then attention and the KV cache,
+   number formats, speed, and sampling</li>
+<li><a href="#where-the-parameters-are">Where the parameters are</a></li>
+<li><a href="#walkthrough-run-2-keep-128-experts-exact-commands-timings-on-this-machine">Walkthrough</a>: the exact commands, and the <a href="#results-held-out-perplexity-lower-is-better">results</a> of runs 1 and 2</li>
+<li><a href="#run-3-a-code-specialist-at-89-b">Run 3</a>: the same 9 B target as a code specialist</li>
+<li><a href="#step-2-benchmarking">Step 2</a>: benchmarks, and how to read them</li>
+<li><a href="#step-3-distillation">Step 3</a>: training the routers against the original</li>
+<li><a href="#inside-the-experts">Inside the experts</a> and <a href="#k-per-layer">a different K per layer</a></li>
+<li><a href="#step-4-quantization-curve">Step 4</a>: how many bits are enough</li>
+<li><a href="#step-5-ablation-merging">Step 5</a>: does an expert matter, and delete or merge?</li>
+<li><a href="#step-6-practical">Step 6</a>: from Hugging Face to your GPU, a practical guide</li>
+<li><a href="#step-7-speculative">Step 7</a>: speculative decoding</li>
+<li><a href="#what-this-taught">What this taught</a></li>
+</ol>
+<hr />
+<h2 id="concepts-from-scratch">Concepts from scratch</h2>
+<p>All numbers below are the real ones for Qwen3.5-35B-A3B (from its <code>config.json</code>),
+so you can find every piece in the scripts.</p>
+<h3 id="1-tokens-and-hidden-states">1. Tokens and hidden states</h3>
+<a class="chip" href="01-tokens.html">▶ Animated chapter 1</a>
+<p>A language model never sees letters. A <strong>tokenizer</strong> cuts text into <strong>tokens</strong>
+(words or word pieces) and gives each one an integer ID. Qwen3.5's tokenizer knows
+248,077 different tokens (its <strong>vocabulary</strong>; the model's tables have 248,320 rows,
+and the extra rows are unused padding).</p>
+<pre><code>&quot;The capital of Australia&quot;  -&gt;  [&quot;The&quot;, &quot; capital&quot;, &quot; of&quot;, &quot; Australia&quot;]  -&gt;  [760, 6511, 314, 8071]
+</code></pre>
+<p>(These are the real IDs. Try it yourself with <code>AutoTokenizer.from_pretrained("models/q35-reap-k128")</code>.)</p>
+<p>The first thing the model does is look each ID up in the <strong>embedding table</strong>
+(a 248,320 x 2048 matrix) and replace it with a row of 2048 numbers. That vector
+of 2048 numbers is the token's <strong>hidden state</strong>. 2048 is the model's <strong>hidden size</strong>.</p>
+<p>Everything the model "knows" about a token at a given moment - its meaning, its
+grammatical role, what came before it, what might come next - is encoded in those
+2048 numbers. The rest of the model is a long series of steps that each read the
+hidden states and <em>edit</em> them. At the very end, the <strong>lm_head</strong> (another
+2048 x 248,320 matrix) turns the final hidden state into 248,320 scores, one per
+possible next token. The highest-scoring ones are the model's prediction.</p>
+<p><strong>Parameters</strong> (or <strong>weights</strong>) are the numbers inside all these matrices. They
+were learned during training and never change while you use the model. In <strong>BF16</strong>
+format (16-bit floating point) each parameter takes 2 bytes, so 35 B parameters =
+~67 GiB on disk.</p>
+<h3 id="2-layers">2. Layers</h3>
+<a class="chip" href="02-layers.html">▶ Animated chapter 2</a>
+<p>A <strong>layer</strong> (here: a <em>decoder layer</em>) is one editing step. The model is a stack of
+40 identical-looking layers, applied one after another. Every layer does two things
+to every token's hidden state:</p>
+<pre><code>            hidden state h (2048 numbers per token)
+                │
+                ├──────────────────────┐
+                ▼                      │
+          RMSNorm (rescale)            │
+                ▼                      │
+     TOKEN MIXER: look at the other    │   &quot;residual connection&quot;:
+     tokens in the text                │   the layer only ADDS a
+     (attention or Gated DeltaNet)     │   correction to h, it does
+                ▼                      │   not replace it
+                + ◄────────────────────┘
+                │
+                ├──────────────────────┐
+                ▼                      │
+          RMSNorm                      │
+                ▼                      │
+     FEED-FORWARD: think about this    │
+     token on its own                  │
+     (here: the Mixture of Experts)    │
+                ▼                      │
+                + ◄────────────────────┘
+                │
+                ▼
+          h for the next layer
+</code></pre>
+<ul>
+<li>The <strong>token mixer</strong> is the only place where tokens exchange information
+  ("Australia" learns that it follows "capital of"). Qwen3.5 uses two kinds, in a
+  repeating 3:1 pattern: 30 layers of <strong>Gated DeltaNet</strong> (a "linear attention"
+  that keeps a fixed-size running memory - cheap for long texts) and 10 layers of
+  classic <strong>full attention</strong> (every token can look directly at every earlier token).
+  You can see the pattern in the <code>03_expert_stats.py</code> log: <code>linear_attention</code> x3,
+  then <code>full_attention</code>.</li>
+<li>The <strong>feed-forward network (FFN)</strong> works on each token separately. This is
+  where most of the model's knowledge is stored, and where most of the parameters
+  are. In this model the FFN is a <strong>Mixture of Experts</strong> (next section).</li>
+<li>The <strong>residual connection</strong> (<code>+</code>) means every layer only adds a correction.
+  The hidden state is like a shared notepad that 40 layers write into in turn.
+  This is why the model can be processed one layer at a time
+  (<code>moe_stream.py</code>): to run layer 17 you only need layer 17's weights and the
+  hidden states that came out of layer 16. It is also why errors <strong>accumulate</strong>:
+  if pruning makes layer 3 write something slightly wrong, every later layer
+  reads that wrong value ("drift").</li>
+</ul>
+<p>One layer of this model is ~1.7 GB in BF16. Its weights are stored in the
+checkpoint under names like <code>model.language_model.layers.17.mlp.experts.down_proj</code>.</p>
+<h3 id="3-experts-and-mixture-of-experts-moe">3. Experts and Mixture of Experts (MoE)</h3>
+<a class="chip" href="03-experts.html">▶ Animated chapter 3</a>
+<p>In a normal (<strong>dense</strong>) model the FFN is one big block that every token goes
+through. A <strong>Mixture of Experts</strong> replaces it with many small FFNs - the
+<strong>experts</strong> - and lets each token use only a few of them.</p>
+<p>One expert here is a tiny 3-matrix network (a "SwiGLU" FFN):</p>
+<pre><code>x (2048)  ──► gate_proj (2048→512) ──► SiLU ──┐
+          └─► up_proj   (2048→512) ───────────×──► down_proj (512→2048) ──► output (2048)
+</code></pre>
+<p>That is 3 x 2048 x 512 = <strong>3.1 M parameters per expert</strong>. Each of the 40 layers
+has <strong>256</strong> of them, plus one <strong>shared expert</strong> of the same shape that <em>every</em>
+token always uses. In the checkpoint the 256 experts of a layer are stored stacked
+together in two big tensors:</p>
+<pre><code>mlp.experts.gate_up_proj   [256, 1024, 2048]   (gate and up for all 256 experts)
+mlp.experts.down_proj      [256, 2048,  512]
+</code></pre>
+<p>So expert number 17 of a layer is simply slice <code>[17]</code> of both tensors. That makes
+removing an expert very easy, which is the whole idea of this project.</p>
+<p>Why build models this way? Capacity versus cost. 40 x 256 experts hold 32 B
+parameters of knowledge, but each token only runs through 8 of them per layer.
+That is what <strong>35B-A3B</strong> means: 35 B parameters in total, about 3 B <strong>A</strong>ctive
+per token. You get the knowledge of a big model at the speed of a small one.
+The catch: all 35 B must still be stored in memory, because you don't know in
+advance which experts the next token will need. That is the problem pruning
+attacks.</p>
+<h3 id="4-the-router">4. The router</h3>
+<a class="chip" href="04-router.html">▶ Animated chapter 4</a>
+<p>Each MoE layer has a <strong>router</strong> (in the code: <code>mlp.gate</code>) that decides which 8
+experts a token goes to. It is just one small matrix, 256 x 2048: one row per
+expert. Step by step, for one token:</p>
+<ol>
+<li><strong>Score</strong>: multiply the hidden state (2048 numbers) by the router matrix -&gt;
+   256 numbers, one score ("logit") per expert. Row 17 of the matrix is in effect a
+   description of "the kind of token expert 17 is good at".</li>
+<li><strong>Softmax</strong>: turn the scores into probabilities that sum to 1.</li>
+<li><strong>Top-k</strong>: keep only the 8 highest (k = 8, <code>num_experts_per_tok</code>).</li>
+<li><strong>Renormalize</strong>: rescale those 8 so they sum to 1. These are the <strong>routing
+   weights</strong> (also called gate values), written <code>g</code> below.</li>
+<li><strong>Mix</strong>: run the token through the 8 chosen experts and add up their outputs,
+   each multiplied by its weight. Add the shared expert's output too.</li>
+</ol>
+<p>A made-up example for the token " Australia" in one layer:</p>
+<pre><code>softmax probabilities, top 8 of 256:
+  expert 203: 0.090   expert  17: 0.070   expert  88: 0.050   expert 150: 0.045
+  expert   4: 0.040   expert 231: 0.040   expert  61: 0.035   expert 119: 0.030
+  (these sum to 0.40; the other 248 experts share the remaining 0.60)
+
+renormalized routing weights g = p / 0.40:
+  203: 0.225   17: 0.175   88: 0.125   150: 0.1125   4: 0.10   231: 0.10   61: 0.0875   119: 0.075
+
+output = 0.225 * E203(x) + 0.175 * E17(x) + ... + 0.075 * E119(x) + shared(x)
+</code></pre>
+<p>This is exactly what <code>moe_forward()</code> in <code>scripts/moe_stream.py</code> computes (and what
+<code>03_expert_stats.py</code> watches).</p>
+<p>During training, Qwen adds a <strong>load-balancing loss</strong> that punishes the router for
+sending too many tokens to the same few experts. As a result, usage is spread
+fairly evenly: in our statistics no expert was ever unused ("dead experts: 0"),
+and the 128 most-used experts of a layer only received 74% of the traffic. That
+is why pruning this model is not free.</p>
+<h3 id="5-what-pruning-experts-does">5. What "pruning experts" does</h3>
+<a class="chip" href="05-pruning.html">▶ Animated chapter 5</a>
+<p><strong>Pruning</strong> = deleting parts of a trained model. Here we delete whole experts:
+for every layer we choose K experts to keep (K = 128 in run 2) and throw the rest
+away. In <code>04_prune.py</code> that is literally slicing:</p>
+<pre><code>experts.gate_up_proj [256, 1024, 2048] -&gt; [128, 1024, 2048]   keep the chosen slices
+experts.down_proj    [256, 2048,  512] -&gt; [128, 2048,  512]
+gate.weight (router) [256, 2048]       -&gt; [128, 2048]         keep the matching rows
+config.json: &quot;num_experts&quot;: 256        -&gt; 128
+</code></pre>
+<p>Nothing else changes - attention, DeltaNet, shared expert, embeddings all stay.
+The router still works, because its softmax and top-8 now simply run over 128
+candidates instead of 256. But think about the example above: if experts 203 and
+17 were deleted, " Australia" no longer gets its two favourite experts. The router
+picks the next best ones that survived, which were trained for slightly different
+kinds of tokens. That <strong>re-routing</strong> is where the quality loss comes from.
+<code>analyze_stats.py</code> measures how often it happens ("routing mass kept"):
+at K=128, 65% of all top-8 picks still land on a surviving expert; at K=48 only 28% -
+and that model broke.</p>
+<p>Each expert is 3.1 M parameters x 40 layers, so removing one expert index from
+every layer saves 126 M parameters. 256 -&gt; 128 experts: 35 B -&gt; 19 B parameters.
+The number of <em>active</em> parameters per token does not change (still 8 experts),
+so the pruned model is about as fast as the original - it just needs half the memory.</p>
+<h3 id="6-choosing-which-experts-to-keep-reap-and-the-alternatives">6. Choosing which experts to keep: REAP and the alternatives</h3>
+<a class="chip" href="06-reap.html">▶ Animated chapter 6</a>
+<p>The key question is how to score an expert's importance. We run 524k tokens of
+representative text through the model and record, for every expert j
+(<code>ExpertStats</code> in <code>moe_stream.py</code>):</p>
+<div class="tablewrap"><table class="data">
+<thead>
+<tr>
+<th>criterion</th>
+<th>what it measures</th>
+<th>weakness</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>freq</code></td>
+<td>how many tokens picked expert j in their top-8</td>
+<td>an expert can be picked often but contribute almost nothing (tiny weight, small output)</td>
+</tr>
+<tr>
+<td><code>gate</code></td>
+<td>sum of the routing weights g that expert j received</td>
+<td>ignores how big the expert's output actually is</td>
+</tr>
+<tr>
+<td><code>ean</code></td>
+<td>sum of the size of expert j's output, ‖E_j(x)‖</td>
+<td>ignores how much the router trusted it</td>
+</tr>
+<tr>
+<td><code>reap</code></td>
+<td><strong>average of g x ‖E_j(x)‖ over the tokens routed to j</strong></td>
+<td>see below</td>
+</tr>
+<tr>
+<td><code>random</code></td>
+<td>nothing - a coin flip</td>
+<td>the baseline that shows whether a criterion helps at all</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>REAP</strong> (<em>Router-weighted Expert Activation Pruning</em>, Cerebras 2025, paper
+"REAP the Experts: Why Pruning Prevails for One-Shot MoE Compression") asks: <em>when
+this expert is used, how much does it change the result?</em> The expert's
+contribution to a token's output is literally <code>g x E_j(x)</code> (step 5 of the router).
+Its size is <code>g x ‖E_j(x)‖</code>, where <code>‖·‖</code> is the vector length (Euclidean norm) of the
+2048-number output. REAP averages that over all the tokens that were routed to the
+expert:</p>
+<pre><code>REAP_j = ( Σ over tokens x routed to j of  g_j(x) · ‖E_j(x)‖ ) / (number of those tokens)
+</code></pre>
+<p>Removing an expert with a small REAP score barely changes any output, because
+whenever it fired, its weighted contribution was small anyway.</p>
+<p>Example of why REAP and frequency disagree:</p>
+<pre><code>expert A: picked by 10,000 tokens, average weight g = 0.05, average output size 0.2
+          -&gt; freq = 10,000 (high),   REAP = 0.05 x 0.2 = 0.010 (low)
+expert B: picked by  1,000 tokens, average weight g = 0.30, average output size 0.5
+          -&gt; freq =  1,000 (low),    REAP = 0.30 x 0.5 = 0.150 (high)
+</code></pre>
+<p>Frequency keeps A, a "background" expert the router adds as a minor ingredient
+everywhere. REAP keeps B, a specialist that dominates the output of the tokens it
+handles (say, Python indentation or chemical formulas). Our results confirm REAP:
+at K=128, perplexity was 5.92 with REAP, 6.47 with frequency and 7.93 with random.
+The two criteria only agreed on 73% of the experts to keep.</p>
+<h3 id="7-calibration-data">7. Calibration data</h3>
+<a class="chip" href="07-calibration.html">▶ Animated chapter 7</a>
+<p>All the statistics come from whatever text we feed the model, so this text, the
+<strong>calibration set</strong>, decides what survives. Experts that only fire on Polish, or
+on Rust code, look useless if the calibration set contains neither, and get
+deleted. Our set (<code>02_calib_data.py</code>) is 4 x 131k tokens: educational web text,
+chat conversations, math reasoning, and code reasoning (with <code>&lt;think&gt;</code> traces,
+rendered through the model's chat template so the router sees the real special
+tokens). <code>analyze_stats.py</code> shows the effect: of 716 experts that specialise in
+web text, 170 were dropped at K=128, which matches web and wikitext
+losing the most quality. To make a code-only model, you would calibrate on code
+only. It would then be much better at code than a general prune, but worse at
+everything else.</p>
+<h3 id="8-perplexity-how-we-measure-damage">8. Perplexity: how we measure damage</h3>
+<a class="chip" href="08-perplexity.html">▶ Animated chapter 8</a>
+<p><strong>Perplexity</strong> (ppl) measures how surprised the model is by real text. For every
+token in the held-out eval set (<code>data/eval.pt</code>, never used for calibration) we
+check what probability the model gave to the token that actually came next:</p>
+<pre><code>loss = average over tokens of  -log(probability of the correct next token)
+ppl  = exp(loss)
+</code></pre>
+<p>Intuition: ppl = 5 means the model is, on average, as uncertain as if it were
+choosing uniformly among 5 equally likely tokens. Lower is better. The original
+model scores 4.92 on our mix; reasoning text is very predictable (2.5) and web
+text is not (8.5). Rough guide from our runs: +20% ppl (K=128) still gave fully
+correct answers; +140% (K=48) gave broken code and repetition loops. Perplexity is
+quick and objective, but it is not the same as answer quality - always test
+generations too (<code>scripts/ask.py</code>).</p>
+<h3 id="9-distillation-and-healing">9. Distillation and "healing"</h3>
+<a class="chip" href="09-distillation.html">▶ Animated chapter 9</a>
+<p>After pruning, you would like to retrain the smaller model a bit to recover. In
+<strong>knowledge distillation</strong>, the original model acts as the <strong>teacher</strong> and the
+pruned model as the <strong>student</strong>. The student is trained to reproduce the teacher's
+full probability distribution over the next token (a KL-divergence loss on the
+logits), not just the single correct token. This is much richer information than
+plain text.</p>
+<p>Proper distillation needs backpropagation through the whole student, with
+optimizer state for all its parameters. NVIDIA recommends 80-100 B tokens of it
+for this level of compression, which means a GPU cluster. What fits on a 16 GB GPU
+is <strong>layer-wise</strong> (local) healing, <code>06_heal.py</code>. For one layer at a time, it trains
+only the router rows so that the pruned MoE block reproduces the original MoE
+block's output on the same input (mean squared error on hidden states). It did not
+help, and it made perplexity slightly worse at both K=48 and K=128. Matching
+hidden states locally is not the same objective as predicting the next token well.</p>
+<h3 id="10-quantization-gguf-q4_k_m-and-iq4_xs">10. Quantization, GGUF, Q4_K_M and IQ4_XS</h3>
+<a class="chip" href="10-quantization.html">▶ Animated chapter 10</a>
+<p><strong>Quantization</strong> stores each parameter in fewer bits. BF16 uses 16 bits per
+weight; "4-bit" uses about 4.5-4.8. Here that made the file 3.2x smaller (35 GiB -&gt; 11 GiB), and
+also faster, because inference is mostly limited by how fast weights can be read
+from memory.</p>
+<p>How 4 bits can work: weights are grouped in small <strong>blocks</strong> (32 consecutive
+numbers). For each block the quantizer stores one <strong>scale</strong> (and sometimes an
+offset), and each weight becomes a 4-bit integer 0-15 meaning "this many steps of
+size <code>scale</code> from the minimum". The weights are rounded to the nearest of 16
+levels. The rounding error is the price.</p>
+<ul>
+<li><strong>GGUF</strong> is llama.cpp's single-file model format: weights + tokenizer +
+  architecture settings. <code>convert_hf_to_gguf.py</code> creates it from the HF checkpoint.</li>
+<li><strong>Q4_K_M</strong> is a <em>k-quant</em>: blocks of 32 grouped into super-blocks of 256, with
+  the per-block scales themselves stored in a few bits. <strong>M</strong> (medium) means a
+  mix: most tensors in 4-bit, a few sensitive ones (parts of attention and of the
+  down projections) in 6-bit. About 4.8 bits per weight on average.</li>
+<li><strong>IQ4_XS</strong> is an <em>i-quant</em>: about 4.25 bits per weight, using a non-uniform set
+  of 16 levels (denser near zero, where most weights are). It is smaller than
+  Q4_K_M but relies on an importance matrix to keep its quality.</li>
+</ul>
+<h3 id="11-the-importance-matrix-imatrix">11. The importance matrix (imatrix)</h3>
+<a class="chip" href="11-imatrix.html">▶ Animated chapter 11</a>
+<p>Not all rounding errors are equally bad. A weight multiplies one input value:
+each output of a matrix is <code>Σ_j w_j · x_j</code>. If input channel j is usually large
+(|x_j| big), an error in w_j is amplified. If x_j is almost always near zero, the
+error in w_j barely matters. So the quantizer should be precise where inputs are
+large and can be sloppy where they are small.</p>
+<p>The <strong>importance matrix</strong> records exactly that. <code>llama-imatrix</code> runs calibration
+text through the full-precision model (~256k tokens here). For every weight matrix
+(including every individual expert) it accumulates the average squared input of
+each column, <code>imp_j = mean(x_j²)</code>. When <code>llama-quantize</code> then picks the
+scale for each block, it minimises the <em>weighted</em> error <code>Σ_j imp_j · (w_j − q_j)²</code>
+instead of the plain error. Same number of bits, but they are spent where the model
+actually uses them.</p>
+<p>It is called a "matrix" because its full form would be the input correlation matrix
+<code>XᵀX</code>. llama.cpp keeps only the diagonal (one number per column). In our run, the
+result is that both 4-bit files scored within noise of BF16 on wikitext (8.52 and
+8.51 vs 8.55). In other words, with an imatrix the 4-bit quantization was free,
+and all the measurable damage came from pruning.</p>
+<p>Note the parallel with REAP: both are "importance from calibration data". REAP
+decides which <em>experts</em> survive, and the imatrix decides which <em>weight columns</em> get
+the precision. Both depend on the calibration text being representative.</p>
+<h3 id="12-other-names-you-will-meet">12. Other names you will meet</h3>
+<a class="chip" href="12-pipeline.html">▶ Animated chapter 12</a>
+<div class="tablewrap"><table class="data">
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>checkpoint</td>
+<td>a saved model: <code>config.json</code> + weights in <code>*.safetensors</code> shards + tokenizer files</td>
+</tr>
+<tr>
+<td>safetensors</td>
+<td>the HF file format for weights; can load single tensors lazily (<code>Checkpoint.tensors()</code>)</td>
+</tr>
+<tr>
+<td>logits</td>
+<td>the raw scores before softmax (router: 256 per token; lm_head: 248,320 per token)</td>
+</tr>
+<tr>
+<td>RMSNorm</td>
+<td>rescales a hidden state to a standard size before each sub-block, keeping numbers stable</td>
+</tr>
+<tr>
+<td>shared expert</td>
+<td>an extra expert every token always uses (here gated by a sigmoid), untouched by pruning</td>
+</tr>
+<tr>
+<td>MTP head</td>
+<td>"multi-token prediction" layer used only for speculative decoding; we dropped it (<code>--no-mtp</code>)</td>
+</tr>
+<tr>
+<td>vision tower</td>
+<td>the image encoder (0.45 B); pruning only touched the language part, so images still work in principle</td>
+</tr>
+<tr>
+<td>KV cache</td>
+<td>memory where attention layers keep past tokens' keys/values during generation; grows with context (<a href="#13-attention-deltanet-and-the-kv-cache">concept 13</a>)</td>
+</tr>
+<tr>
+<td><code>-ngl 99</code></td>
+<td>llama.cpp: put all layers on the GPU; <code>--fit on</code> lets it decide what fits</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="13-attention-deltanet-and-the-kv-cache">13. Attention, Gated DeltaNet and the KV cache</h3>
+<a class="chip" href="13-attention.html">▶ Animated chapter 13</a>
+<p>Every layer has two halves (concept 2). The MoE half works on each token <em>alone</em>. The other half, the
+<strong>token mixer</strong>, is the only place where tokens exchange information: where "it" finds out what it refers to,
+or the answer finds the question. Qwen3.5 uses two kinds of mixer, in a fixed pattern of three DeltaNet layers followed
+by one attention layer (layers 3, 7, 11, …, 39 are attention: 10 of 40).</p>
+<p><strong>Attention</strong> (the original transformer mixer). From each token's hidden state, three vectors are made by
+matrix multiplication: a <strong>query</strong> ("what am I looking for?"), a <strong>key</strong> ("what do I
+contain?") and a <strong>value</strong> ("what do I pass on if chosen?"). Each token compares its query with the keys of
+every earlier token (a dot product, scaled by 1/√256), turns the scores into weights with a softmax, and takes the
+weighted average of their values. A token never looks ahead: that is the <em>causal mask</em>, and it is why the model
+can be trained to predict the next token at every position at once. Details of this model:</p>
+<ul>
+<li><strong>16 heads</strong> of 256 dimensions each: 16 independent attentions in parallel, each free to look for
+something different (one tracks the subject of the sentence, another the last number, and so on).</li>
+<li><strong>Grouped-query attention (GQA)</strong>: only <strong>2</strong> key/value heads, each shared by 8 query heads.
+That cuts what must be stored per token by 8x, for a small loss in flexibility.</li>
+<li><strong>RoPE</strong> (rotary position embedding): position is encoded by rotating parts of the query and key vectors
+by an angle that grows with the position, so the dot product depends on the <em>distance</em> between two tokens. Here only
+a quarter of the dimensions rotate, with a very slow base (θ = 10⁷), which suits contexts up to 262,144 tokens.</li>
+<li>An <strong>output gate</strong>: the attention result is multiplied by a learned sigmoid gate before it is added to
+the residual stream.</li>
+</ul>
+<p><strong>The KV cache.</strong> When generating, the keys and values of earlier tokens never change, so they are computed
+once and stored. Each new token then needs only its own query, key and value, plus a look at the cache. The cache grows by
+the same amount for every token:</p>
+<pre><code>KV bytes per token = attention layers x 2 (K and V) x KV heads x head size x bytes per number
+                   = 10 x 2 x 2 x 256 x 2 bytes (f16) = 20,480 bytes = 20 KiB</code></pre>
+<p><strong>A worked example.</strong> "The capital of Australia is" is 5 tokens (<code>The</code>,
+<code>␣capital</code>, <code>␣of</code>, <code>␣Australia</code>, <code>␣is</code>). Reading the prompt fills the cache
+with 5 entries in each of the 10 attention layers: 5 x 20 KiB = 100 KiB. To produce " Canberra", the new token's query is
+compared with those 5 stored keys; then " Canberra"'s own key and value are appended (6 entries, 120 KiB), and so on, one
+entry per token. Without the cache, every new token would recompute the keys and values of the whole text so far: after a
+1,000-token prompt, generating 1,000 more tokens would mean about 1.5 million token-passes through the attention
+layers instead of 2,000. At book scale the cache gets big: a 300-page book is roughly 100,000–130,000 tokens, 2–2.5 GiB of
+cache in f16.</p>
+<p>llama.cpp's own allocation, read from the server's log (<code>scripts/kv_memory.sh</code>, the 19 B model at Q4_K_M,
+10.3 GiB of weights on the GPU):</p>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>context (tokens)</th><th>KV cache, f16</th><th>KV cache, q8_0</th><th>DeltaNet state</th><th>projected GPU memory, f16 / q8_0 (14.6 GiB free)</th></tr></thead>
+<tbody>
+<tr><td>4,096</td><td>80 MiB</td><td>42.5 MiB</td><td>62.8 MiB</td><td>10.6 / 10.5 GiB</td></tr>
+<tr><td>32,768</td><td>640 MiB</td><td>340 MiB</td><td>62.8 MiB</td><td>11.1 / 10.9 GiB</td></tr>
+<tr><td>131,072</td><td>2,560 MiB</td><td>1,360 MiB</td><td>62.8 MiB</td><td>13.1 / 12.1 GiB</td></tr>
+<tr><td>262,144 (the maximum)</td><td>5,120 MiB</td><td>2,720 MiB</td><td>62.8 MiB</td><td><strong>15.7</strong> / 13.8 GiB</td></tr>
+</tbody></table></div>
+<div class="tablewrap"><svg viewBox="0 0 900 300" role="img" aria-label="GPU memory by context length: model weights, KV cache, DeltaNet state and compute buffers, f16 and q8_0 cache, against the free VRAM" style="display:block;width:100%;min-width:640px;height:auto"><g font-size="11"><text x="162" y="38" text-anchor="end" class="t-mono">4k · f16</text><rect x="170.0" y="24" width="428.7" height="20" class="f-ink3"/><rect x="598.7" y="24" width="3.2" height="20" class="f-h"/><rect x="602.0" y="24" width="2.5" height="20" class="f-route"/><rect x="604.5" y="24" width="4.4" height="20" class="f-act"/><text x="614.9" y="38" class="t-mono">10.6 GiB</text><text x="162" y="68" text-anchor="end" class="t-mono">32k · f16</text><rect x="170.0" y="54" width="428.7" height="20" class="f-ink3"/><rect x="598.7" y="54" width="26.0" height="20" class="f-h"/><rect x="624.7" y="54" width="2.5" height="20" class="f-route"/><rect x="627.3" y="54" width="5.5" height="20" class="f-act"/><text x="638.8" y="68" class="t-mono">11.1 GiB</text><text x="162" y="98" text-anchor="end" class="t-mono">128k · f16</text><rect x="170.0" y="84" width="428.7" height="20" class="f-ink3"/><rect x="598.7" y="84" width="103.9" height="20" class="f-h"/><rect x="702.6" y="84" width="2.5" height="20" class="f-route"/><rect x="705.2" y="84" width="9.4" height="20" class="f-act"/><text x="720.6" y="98" class="t-mono">13.1 GiB</text><text x="162" y="128" text-anchor="end" class="t-mono">256k · f16</text><rect x="170.0" y="114" width="428.7" height="20" class="f-ink3"/><rect x="598.7" y="114" width="207.8" height="20" class="f-h"/><rect x="806.5" y="114" width="2.5" height="20" class="f-route"/><rect x="809.1" y="114" width="14.6" height="20" class="f-act"/><text x="829.7" y="128" class="t-mono">15.7 GiB</text><text x="162" y="172" text-anchor="end" class="t-mono">4k · q8_0</text><rect x="170.0" y="158" width="428.7" height="20" class="f-ink3"/><rect x="598.7" y="158" width="1.7" height="20" class="f-h"/><rect x="600.5" y="158" width="2.5" height="20" class="f-route"/><rect x="603.0" y="158" width="4.4" height="20" class="f-act"/><text x="613.4" y="172" class="t-mono">10.5 GiB</text><text x="162" y="202" text-anchor="end" class="t-mono">32k · q8_0</text><rect x="170.0" y="188" width="428.7" height="20" class="f-ink3"/><rect x="598.7" y="188" width="13.8" height="20" class="f-h"/><rect x="612.5" y="188" width="2.5" height="20" class="f-route"/><rect x="615.1" y="188" width="6.0" height="20" class="f-act"/><text x="627.1" y="202" class="t-mono">10.9 GiB</text><text x="162" y="232" text-anchor="end" class="t-mono">128k · q8_0</text><rect x="170.0" y="218" width="428.7" height="20" class="f-ink3"/><rect x="598.7" y="218" width="55.2" height="20" class="f-h"/><rect x="653.9" y="218" width="2.5" height="20" class="f-route"/><rect x="656.5" y="218" width="17.7" height="20" class="f-act"/><text x="680.2" y="232" class="t-mono">12.1 GiB</text><text x="162" y="262" text-anchor="end" class="t-mono">256k · q8_0</text><rect x="170.0" y="248" width="428.7" height="20" class="f-ink3"/><rect x="598.7" y="248" width="110.4" height="20" class="f-h"/><rect x="709.1" y="248" width="2.5" height="20" class="f-route"/><rect x="711.7" y="248" width="33.3" height="20" class="f-act"/><text x="751.0" y="262" class="t-mono">13.8 GiB</text><line x1="776.6" x2="776.6" y1="16" y2="270" stroke="var(--cut)" stroke-dasharray="5 4" stroke-width="1.6"/><text x="772.6" y="12" text-anchor="end" class="t-cut">14.6 GiB free on the card</text><rect x="170" y="282" width="12" height="10" class="f-ink3"/><text class="t-dim" x="186" y="291">model weights 10.3 GiB</text><rect x="340" y="282" width="12" height="10" class="f-h"/><text class="t-dim" x="356" y="291">KV cache</text><rect x="510" y="282" width="12" height="10" class="f-route"/><text class="t-dim" x="526" y="291">DeltaNet state 63 MiB</text><rect x="680" y="282" width="12" height="10" class="f-act"/><text class="t-dim" x="696" y="291">compute buffers</text></g></svg></div>
+<p>The formula is exact: 20 KiB x 32,768 = 640 MiB. At the full context the f16 cache no longer fits next to the model on
+a 16 GB card: 15.7 GiB projected against 14.6 GiB free (llama.cpp's log: "cannot meet free memory target"; on Windows the rest then spills silently into system
+RAM). Storing the cache in 8 bits (<code>-ctk q8_0 -ctv q8_0</code>, 1.06 bytes per number) makes the whole 262k context
+fit. For comparison, the same model with all 40 layers as attention would need 80 KiB per token (20 GiB at 262k), and
+without GQA (16 KV heads) 640 KiB per token (160 GiB).</p>
+<p><strong>Gated DeltaNet</strong> (a <em>linear attention</em>). Instead of keeping every past key and value, each of its
+32 heads keeps one fixed 128 x 128 matrix <strong>S</strong>, a memory that maps keys to values. For every new token:</p>
+<pre><code>S ← α · S · (I − β k kᵀ)  +  β v kᵀ       (forget a little, erase what was stored at key k, write v there)
+output = S q                              (read the memory with the query)</code></pre>
+<p>This is the <strong>delta rule</strong>: the update writes the <em>difference</em> between the new value and what the
+memory already returns for that key, so repeated facts do not pile up. The <strong>gate</strong> α (between 0 and 1,
+computed from the token) lets the layer decide how fast to forget; β decides how strongly to write. A short convolution
+over the last 4 tokens sharpens the inputs first. The cost is the same for every token, and so is the memory:
+32 heads x 128 x 128 numbers x 4 bytes (kept in FP32) = 2 MiB per layer, 60 MiB for all 30 layers, which is exactly the
+<code>S (f32): 60.00 MiB</code> in llama.cpp's log, plus 2.8 MiB of convolution state. It is the same at 4 tokens and at
+262,144.</p>
+<p><strong>Why mix the two?</strong> A fixed-size memory cannot hold everything exactly: after enough tokens, old details
+blur. Attention can recall any earlier token exactly, but costs memory and time that grow with the context. Three cheap
+DeltaNet layers for every exact attention layer is Qwen's compromise: a quarter of the KV cache of a pure transformer,
+long contexts that still fit on one GPU, and exact recall where it is needed.</p>
+
+<h3 id="14-number-formats-fp32-fp16-bf16-and-integers">14. Number formats: FP32, FP16, BF16 and integers</h3>
+<a class="chip" href="14-numbers.html">▶ Animated chapter 14</a>
+<p>A <strong>floating-point</strong> number is stored as a sign, an <strong>exponent</strong> (which power of two) and a
+<strong>mantissa</strong> (the digits): value = ±1.mantissa x 2^exponent. More exponent bits give a wider
+<em>range</em>; more mantissa bits give more <em>precision</em>. The three formats that matter here:</p>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>format</th><th>sign · exponent · mantissa bits</th><th>largest value</th><th>smallest normal value</th><th>relative precision</th><th>used here for</th></tr></thead>
+<tbody>
+<tr><td>FP32</td><td>1 · 8 · 23</td><td>3.4 x 10³⁸</td><td>1.2 x 10⁻³⁸</td><td>~7 digits (2⁻²³)</td><td>router weights in GGUF, the DeltaNet state, sums, softmax</td></tr>
+<tr><td>FP16</td><td>1 · 5 · 10</td><td>65,504</td><td>6.1 x 10⁻⁵</td><td>~3 digits (2⁻¹⁰)</td><td>the KV cache, quantization scales</td></tr>
+<tr><td>BF16</td><td>1 · 8 · 7</td><td>3.4 x 10³⁸</td><td>1.2 x 10⁻³⁸</td><td>~2 digits (2⁻⁷ ≈ 0.8%)</td><td>the original weights, every activation in our scripts</td></tr>
+</tbody></table></div>
+<div class="tablewrap"><svg viewBox="0 0 900 200" role="img" aria-label="Bit layouts of FP32, FP16 and BF16: sign, exponent and mantissa bits" style="display:block;width:100%;min-width:640px;height:auto"><g font-size="11"><text x="0" y="37" font-weight="600" font-size="13">FP32</text><rect x="60" y="20" width="22" height="24" rx="3" class="f-cut" opacity="0.85"/><rect x="84" y="20" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="108" y="20" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="132" y="20" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="156" y="20" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="180" y="20" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="204" y="20" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="228" y="20" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="252" y="20" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="276" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="300" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="324" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="348" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="372" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="396" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="420" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="444" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="468" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="492" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="516" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="540" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="564" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="588" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="612" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="636" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="660" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="684" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="708" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="732" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="756" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="780" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="804" y="20" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><text class="t-dim" x="60" y="60">range 10^±38, ~7 digits</text><text x="0" y="93" font-weight="600" font-size="13">FP16</text><rect x="60" y="76" width="22" height="24" rx="3" class="f-cut" opacity="0.85"/><rect x="84" y="76" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="108" y="76" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="132" y="76" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="156" y="76" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="180" y="76" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="204" y="76" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="228" y="76" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="252" y="76" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="276" y="76" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="300" y="76" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="324" y="76" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="348" y="76" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="372" y="76" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="396" y="76" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="420" y="76" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><text class="t-dim" x="60" y="116">range up to 65,504, ~3 digits</text><text x="0" y="149" font-weight="600" font-size="13">BF16</text><rect x="60" y="132" width="22" height="24" rx="3" class="f-cut" opacity="0.85"/><rect x="84" y="132" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="108" y="132" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="132" y="132" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="156" y="132" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="180" y="132" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="204" y="132" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="228" y="132" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="252" y="132" width="22" height="24" rx="3" class="f-act" opacity="0.85"/><rect x="276" y="132" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="300" y="132" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="324" y="132" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="348" y="132" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="372" y="132" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="396" y="132" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><rect x="420" y="132" width="22" height="24" rx="3" class="f-h" opacity="0.85"/><text class="t-dim" x="60" y="172">FP32's range, ~2 digits: the top 16 bits of FP32</text><rect x="60" y="182" width="12" height="8" class="f-cut"/><text class="t-dim" x="76" y="190">sign</text><rect x="120" y="182" width="12" height="8" class="f-act"/><text class="t-dim" x="136" y="190">exponent (range)</text><rect x="250" y="182" width="12" height="8" class="f-h"/><text class="t-dim" x="266" y="190">mantissa (precision)</text></g></svg></div>
+<p><strong>BF16 is the top half of FP32</strong>: the same sign and 8 exponent bits, with the mantissa cut from 23 bits to 7.
+Converting is just dropping 16 bits, and the range is the same as FP32's. FP16 keeps more precision but its 5 exponent
+bits reach only 65,504 at the top and 6 x 10⁻⁵ at the bottom (below that, numbers lose precision as "subnormals" and
+under 6 x 10⁻⁸ become 0). A real weight from layer 20, expert 241:</p>
+<pre><code>−0.0137939453125   BF16  1 | 01111000 | 1100010            sign − , exponent 120 − 127 = −7 , mantissa 1.765625
+                   value = −1.765625 x 2⁻⁷ = −0.0137939453125
+                   FP16  1 | 01000    | 1100010000         same value (FP16 has enough bits for it)</code></pre>
+<p>What the measurements of this model say (<code>scripts/number_formats.py</code>):</p>
+<ul>
+<li><strong>Weights are small numbers.</strong> In that expert's gate/up matrix (2.1 M weights), the median |w| is 0.0076
+and the largest 0.070. 0.43% are below FP16's normal range, the smallest 6.5 x 10⁻⁹, which FP16 would round to zero.
+BF16 keeps them all, roughly.</li>
+<li><strong>The hidden state stays moderate.</strong> On 8 calibration sequences its largest value is 41 (after layer 38);
+FP16's 65,504 ceiling is never close in this model. BF16's real advantage is in <em>training</em>, where gradients span many
+more powers of two and FP16 needs tricks ("loss scaling") to avoid overflow and underflow.</li>
+<li><strong>Rounding makes order matter.</strong> Three real hidden-state values, 5.625 + (−0.387) + (−0.387): adding left to
+right in BF16 gives 4.875, the other order gives 4.844, the exact answer is 4.852. BF16 can only store numbers near 5 in
+steps of 1/32, so each addition rounds, and where it rounds depends on what was added first. That is all bug 4 was: GPU
+threads adding in a different order on every run (<a href="#ablate-determinism">step 5</a>).</li>
+</ul>
+<p><strong>Integers</strong> appear in quantization (concept 10): a Q4 weight is a 4-bit integer 0–15 plus a scale shared by
+its block (in the K-quants, a small integer scale per block of 32 times one FP16 scale per 256 weights); the GPU converts back to floating point on the fly while computing. Newer GPUs, including the RTX
+50xx, also compute natively in 8- and 4-bit floating-point formats (FP8, FP4), which some recent models are trained or
+shipped in.</p>
+
+<h3 id="15-what-sets-the-speed">15. What sets the speed</h3>
+<a class="chip" href="15-speed.html">▶ Animated chapter 15</a>
+<p>Running a model has two very different phases:</p>
+<ul>
+<li><strong>Prefill</strong> (reading the prompt): all prompt tokens go through each layer together, so every weight that is
+loaded is used for hundreds of tokens. The GPU's arithmetic is the limit: <strong>compute-bound</strong>. Measured: about
+5,500 tokens per second for the 19 B Q4_K_M (step 4).</li>
+<li><strong>Decode</strong> (generating): one token at a time, and each token needs every active weight once. The GPU
+spends its time <em>reading</em> weights from memory, not multiplying: <strong>memory-bound</strong>.</li>
+</ul>
+<p>In numbers, from step 4's speed test of the 19 B Q4_K_M: reading a 1,621-token prompt took 0.29 s (5,527 tokens per
+second), generating 256 tokens took 1.20 s (212.5 per second). Writing 256 tokens took four times longer than reading six
+times as many.</p>
+<p>That makes decoding speed something you can estimate with a calculator: <em>tokens per second ≤ memory bandwidth ÷
+bytes read per token</em>. For the 19 B model at Q4_K_M (sizes read from the GGUF file, <code>scripts/theory_report.py</code>):</p>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>part</th><th>in the file</th><th>read per generated token</th></tr></thead>
+<tbody>
+<tr><td>routed experts (40 layers x 128)</td><td>9.08 GiB</td><td>8 of 128 per layer: 0.57 GiB</td></tr>
+<tr><td>attention, DeltaNet, routers, norms</td><td>0.77 GiB</td><td>all: 0.77 GiB</td></tr>
+<tr><td>lm_head (2048 x 248,320)</td><td>0.39 GiB</td><td>all: 0.39 GiB</td></tr>
+<tr><td>shared experts</td><td>0.07 GiB</td><td>all: 0.07 GiB</td></tr>
+<tr><td>embedding table</td><td>0.27 GiB</td><td>one row: ~0</td></tr>
+<tr><td><strong>total</strong></td><td><strong>10.58 GiB</strong></td><td><strong>1.80 GiB</strong></td></tr>
+</tbody></table></div>
+<p>The RTX 5070 Ti reads 896 GB/s, so at most 896 / 1.93 GB ≈ <strong>463 tokens per second</strong>. Measured: 212, 46% of
+that ceiling, which is typical: 40 layers of many small operations, picking experts and launching kernels all cost time
+that is not reading. Three things follow:</p>
+<ul>
+<li><strong>Why MoE is fast.</strong> The experts are 86% of the file but only 32% of what a token reads. A dense 19 B model
+at the same 4 bits would read the whole 10.6 GiB per token: a ceiling of about 80 tokens per second.</li>
+<li><strong>Why smaller quantizations were not faster</strong> (step 4): from IQ2_XXS to Q4_K_M everything ran at 200–212
+tokens per second. Once the bytes per token are this small, the fixed overheads dominate.</li>
+<li><strong>Why spilling is a cliff.</strong> Weights that do not fit in VRAM are read from system RAM over PCIe (4.0 x16
+on this machine, about 32 GB/s in theory), around 28x slower per byte. In step 4, Q6_K (14.2 GiB, partly spilled) ran at
+108 tokens per second, Q8_0 at 54, BF16 at 20.</li>
+</ul>
+<p><strong>Batching.</strong> If 8 requests generate at the same time, each weight that is read can serve all 8: total
+throughput rises while each request slows down. Measured with <code>scripts/batch_speed.py</code> (256 tokens per
+request):</p>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>parallel requests</th><th>1</th><th>2</th><th>4</th><th>8</th><th>16</th></tr></thead>
+<tbody>
+<tr><td>total tokens per second</td><td>182</td><td>296</td><td>355</td><td>440</td><td>488</td></tr>
+<tr><td>per request</td><td>182</td><td>148</td><td>89</td><td>55</td><td>31</td></tr>
+<tr><td>distinct experts per layer the batch needs (estimate, random routing)</td><td>8</td><td>15.5</td><td>29</td><td>52</td><td>82</td></tr>
+</tbody></table></div>
+<p>A dense model would gain almost linearly here. A MoE gains less, because each request picks its own 8 experts: the
+batch must read the <em>union</em> of their choices, and at 16 requests that is already about 82 of the 128 experts in
+every layer. This is why the benchmarks in steps 2 and 4 ran with <code>-np 4</code>: four answers at once were about twice as
+fast in total, at the cost of non-reproducible rounding.</p>
+<p><strong>Speculative decoding</strong> applies the same idea to a single request: something cheap drafts a few tokens and
+the model checks them all in one pass (<a href="#step-7-speculative">step 7</a>).</p>
+
+<h3 id="16-from-probabilities-to-text">16. From probabilities to text: sampling and chat templates</h3>
+<a class="chip" href="16-sampling.html">▶ Animated chapter 16</a>
+<p>The model never outputs text. After the last layer, the lm_head turns the hidden state into 248,320 logits, one per
+vocabulary entry, and a softmax turns them into probabilities (concept 1). The real distributions of the 19 B model
+(llama-server with <code>n_probs</code>, <code>results/sampling_probs.json</code>):</p>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>after "The capital of Australia is"</th><th>p</th><th>after "Once upon a time, in a small village by the sea, there lived a"</th><th>p</th></tr></thead>
+<tbody>
+<tr><td>" Canberra"</td><td>69.6%</td><td>" young"</td><td>19.7%</td></tr>
+<tr><td>" a"</td><td>6.3%</td><td>" fish"</td><td>11.4%</td></tr>
+<tr><td>" located"</td><td>2.6%</td><td>" man"</td><td>10.2%</td></tr>
+<tr><td>"\n"</td><td>2.3%</td><td>" curious"</td><td>4.8%</td></tr>
+<tr><td>":"</td><td>2.0%</td><td>" kind"</td><td>4.2%</td></tr>
+</tbody></table></div>
+<p>A <strong>sampler</strong> picks one token, which is appended to the text, and the whole step repeats. The common
+choices:</p>
+<ul>
+<li><strong>Greedy</strong> (temperature 0): always the most likely token. Deterministic, so all our benchmarks used it,
+but prone to loops: the repetition loops of run 1 were greedy decoding of a damaged model going round in circles.</li>
+<li><strong>Temperature T</strong>: divide the logits by T before the softmax. T &lt; 1 sharpens the distribution (safer),
+T &gt; 1 flattens it (more varied, more mistakes).</li>
+<li><strong>Top-k</strong>: keep only the k most likely tokens. <strong>Top-p</strong> ("nucleus"): keep the smallest set
+whose probabilities add up to p. <strong>Min-p</strong>: drop tokens less likely than min_p x the top token's probability.
+All three cut off the long tail of unlikely tokens that would derail the text; then one token is drawn at random from what
+is left, in proportion to its probability.</li>
+<li><strong>Repetition and presence penalties</strong>: lower the scores of tokens that already appeared, to fight
+loops.</li>
+</ul>
+<p><strong>Temperature, worked out.</strong> The probability of token i is <code>p_i = e^(z_i / T) / Σ_j e^(z_j / T)</code>,
+where z are the logits. Dividing by a small T stretches the gaps between logits (the leader pulls away); a large T
+squeezes them (everything moves towards equal). The real effect on the two prompts (llama-server, only the temperature
+changed, other filters off):</p>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>temperature</th><th>" Canberra"</th><th>" a"</th><th>all other 248,318 tokens</th><th>" young"</th><th>" fish"</th><th>" man"</th></tr></thead>
+<tbody>
+<tr><td>0.5 (sharper)</td><td>98.7%</td><td>0.8%</td><td>0.5%</td><td>53.8%</td><td>18.1%</td><td>14.6%</td></tr>
+<tr><td>1.0 (the model's own distribution)</td><td>69.6%</td><td>6.3%</td><td>24.1%</td><td>19.7%</td><td>11.4%</td><td>10.2%</td></tr>
+<tr><td>1.5 (flatter)</td><td><strong>19.2%</strong></td><td>3.9%</td><td><strong>76.9%</strong></td><td>5.3%</td><td>3.7%</td><td>3.4%</td></tr>
+</tbody></table></div>
+<p>At 1.5 the right answer drops from 70% to 19%: no single wrong token got likely, but the vocabulary has 248,320
+entries, and when each of the unlikely ones gains a little, together they take 77%. That is why high temperatures derail,
+and why they are always combined with a filter that cuts the tail.</p>
+<p><strong>The filters, worked out</strong> (temperature 1, each filter alone; the kept tokens are renormalised to add up
+to 100%):</p>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>filter</th><th>"The capital of Australia is"</th><th>"… there lived a"</th></tr></thead>
+<tbody>
+<tr><td>top-k = 3</td><td>Canberra 88.6%, a 8.1%, located 3.3%</td><td>young 47.6%, fish 27.6%, man 24.8%</td></tr>
+<tr><td>top-p = 0.5</td><td>Canberra 100% (69.6% alone is already ≥ 50%)</td><td>young 39%, fish 23%, man 20%, curious 10%, kind 8% (five needed to reach 50%)</td></tr>
+<tr><td>min-p = 0.2</td><td>Canberra 100% (the cut is 0.2 x 69.6% = 13.9%)</td><td>the same five (the cut is 0.2 x 19.7% = 3.9%)</td></tr>
+</tbody></table></div>
+<p>Top-k keeps 3 candidates whether the model is sure or not, so it still lets " a" through on a factual question. Top-p
+and min-p adapt: one candidate when the model is confident, five when many continuations are reasonable.</p>
+<p>Qwen's model card recommends, for thinking mode on general tasks, <code>temperature=1.0, top_p=0.95, top_k=20,
+min_p=0, presence_penalty=1.5</code>; for coding, temperature 0.6 without the presence penalty; for non-thinking mode,
+temperature 0.7, top_p 0.8. These are the defaults the model was tuned with: greedy decoding is good for reproducible
+measurements, not necessarily for the best answers.</p>
+<p><strong>Chat templates.</strong> A chat model is still a next-token predictor; a conversation is turned into one text
+with special tokens marking who speaks, and the model continues it. This model's template (rendered by llama-server's
+<code>/apply-template</code>):</p>
+<pre><code>&lt;|im_start|&gt;system
+You are a helpful assistant.&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+What is 2+2?&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+&lt;think&gt;                        ← thinking on: the model writes its reasoning here, then &lt;/think&gt; and the answer
+
+&lt;/think&gt;                       ← thinking off: the template itself writes an EMPTY think block</code></pre>
+<p>The model learned in training that text after <code>&lt;|im_start|&gt;assistant</code> is its own turn, and it ends its
+turn by producing <code>&lt;|im_end|&gt;</code>, which the server treats as a stop token. "Turning thinking off" is not a
+switch inside the network: the template pre-fills an empty <code>&lt;think&gt;&lt;/think&gt;</code>, so the model sees
+that its reasoning is already over and starts the answer. This is also why the template matters when calibrating
+(concept 7): <code>02_calib_data.py</code> renders chat data with the model's own template, so the router sees the same
+special tokens it sees in use.</p>
+<hr />
+<h2 id="where-the-parameters-are">Where the parameters are</h2>
+<div class="tablewrap"><table class="data">
+<thead>
+<tr>
+<th>part</th>
+<th>params</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>routed experts: 40 layers x 256 x (3 x 2048 x 512)</td>
+<td>32.2 B (~90%)</td>
+</tr>
+<tr>
+<td>embeddings + lm_head (248k vocab x 2048, untied)</td>
+<td>1.0 B</td>
+</tr>
+<tr>
+<td>attention / Gated DeltaNet / shared experts / norms</td>
+<td>~1.7 B</td>
+</tr>
+<tr>
+<td>vision tower</td>
+<td>0.45 B</td>
+</tr>
+<tr>
+<td>MTP head (speculative decoding only)</td>
+<td>0.8 B -&gt; dropped</td>
+</tr>
+</tbody>
+</table></div>
+<p>One expert = 3.1 M params, so total ~ 2.9 B + 40 x K x 3.15 M for K experts kept per
+layer: K=128 -&gt; ~19 B, K=64 -&gt; ~11 B, <strong>K=48 -&gt; 8.9 B</strong>. Top-8 routing is unchanged,
+so ~3 B params are still active per token: speed stays similar, memory drops 4x.</p>
+<h2 id="walkthrough-run-2-keep-128-experts-exact-commands-timings-on-this-machine">Walkthrough: run 2, keep 128 experts (exact commands, timings on this machine)</h2>
+<pre class="cmd"><code class="language-bash">cd ~/qwen
+scripts/00_setup.sh                                   # once: CUDA toolkit, venv, llama.cpp build
+scripts/01_download.sh                                # 67 GiB BF16 teacher, ~2 min
+
+# 1. calibration + eval token sets (~5 min, downloads datasets)
+.venv/bin/python -I scripts/02_calib_data.py
+
+# 2. pass 1: per-expert statistics, streaming the model layer by layer (~3 min)
+.venv/bin/python -I scripts/03_expert_stats.py
+
+# 3. what would K cost? (CPU, instant)
+.venv/bin/python -I scripts/analyze_stats.py --keep 128 96
+
+# 4. measure before writing: baseline + virtual pruning, nothing written (~1 min per eval)
+setsid nohup scripts/run_sweep.sh 128 96 &gt; logs/sweep.log 2&gt;&amp;1 &amp;
+
+# 5. write the pruned checkpoint (CPU, ~3 min, 36 GiB)
+.venv/bin/python -I scripts/04_prune.py --keep 128 --criterion reap --out models/q35-reap-k128
+
+# 6. verify it from disk: must reproduce the virtual result
+.venv/bin/python -I scripts/05_eval.py --model models/q35-reap-k128
+
+# 7. optional healing (in place; it did not help -&gt; undo by re-running step 5)
+.venv/bin/python -I scripts/06_heal.py --student models/q35-reap-k128 --train router --target moe
+.venv/bin/python -I scripts/05_eval.py --model models/q35-reap-k128
+
+# 8. GGUF + imatrix + quantize (~32 min: imatrix 21 min, slow because BF16 35 GB &gt; 16 GB VRAM)
+#    Disk: needs HF 36 GiB + BF16 GGUF 35 GiB at once -&gt; the teacher was deleted first
+#    (rm -rf models/Qwen3.5-35B-A3B; scripts/01_download.sh brings it back).
+scripts/07_gguf.sh models/q35-reap-k128 Q4_K_M IQ4_XS
+
+# 9. run it
+llama.cpp/build/bin/llama-server -m gguf/q35-reap-k128/q35-reap-k128-Q4_K_M.gguf -ngl 99 -c 16384 --port 8089
+</code></pre>
+<p>Run 1 was the same with <code>--keep 48</code> (and <code>--target layer</code> healing as well).
+Every script explains its step in the docstring at the top. All evals are appended
+to <code>results/eval.jsonl</code> (run 1's are in <code>results/run1-k48/</code>).</p>
+<h2 id="results-held-out-perplexity-lower-is-better">Results (held-out perplexity, lower is better)</h2>
+<div class="tablewrap"><table class="data">
+<thead>
+<tr>
+<th>variant</th>
+<th>params</th>
+<th>web</th>
+<th>chat</th>
+<th>think</th>
+<th>wikitext</th>
+<th>all</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>original, 256 experts</td>
+<td>35 B</td>
+<td>8.47</td>
+<td>4.03</td>
+<td>2.50</td>
+<td>6.84</td>
+<td><strong>4.92</strong></td>
+</tr>
+<tr>
+<td><strong>REAP, keep 128</strong></td>
+<td><strong>19 B</strong></td>
+<td>10.6</td>
+<td>4.45</td>
+<td>2.61</td>
+<td>9.96</td>
+<td><strong>5.92</strong></td>
+</tr>
+<tr>
+<td>REAP 128 + router heal (target=moe)</td>
+<td>19 B</td>
+<td>10.8</td>
+<td>4.43</td>
+<td>2.63</td>
+<td>10.1</td>
+<td>5.96</td>
+</tr>
+<tr>
+<td>frequency, keep 128</td>
+<td>19 B</td>
+<td>12.0</td>
+<td>4.68</td>
+<td>2.88</td>
+<td>10.8</td>
+<td>6.47</td>
+</tr>
+<tr>
+<td>random, keep 128</td>
+<td>19 B</td>
+<td>15.4</td>
+<td>5.60</td>
+<td>3.24</td>
+<td>14.1</td>
+<td>7.93</td>
+</tr>
+<tr>
+<td>REAP, keep 96</td>
+<td>15 B</td>
+<td>12.8</td>
+<td>5.36</td>
+<td>2.80</td>
+<td>13.0</td>
+<td>7.06</td>
+</tr>
+<tr>
+<td>REAP, keep 64</td>
+<td>11 B</td>
+<td>18.4</td>
+<td>7.81</td>
+<td>3.21</td>
+<td>19.4</td>
+<td>9.72</td>
+</tr>
+<tr>
+<td><strong>REAP, keep 48</strong></td>
+<td><strong>8.9 B</strong></td>
+<td>24.8</td>
+<td>8.33</td>
+<td>3.52</td>
+<td>25.9</td>
+<td><strong>11.7</strong></td>
+</tr>
+<tr>
+<td>frequency, keep 48</td>
+<td>8.9 B</td>
+<td>35.2</td>
+<td>9.21</td>
+<td>3.87</td>
+<td>36.0</td>
+<td>14.6</td>
+</tr>
+<tr>
+<td>random, keep 48</td>
+<td>8.9 B</td>
+<td>47.8</td>
+<td>13.9</td>
+<td>6.69</td>
+<td>38.2</td>
+<td>20.3</td>
+</tr>
+<tr>
+<td>REAP 48 + router heal (target=layer)</td>
+<td>8.9 B</td>
+<td>36.2</td>
+<td>10.2</td>
+<td>3.92</td>
+<td>42.8</td>
+<td>15.8</td>
+</tr>
+<tr>
+<td>REAP 48 + router heal (target=moe)</td>
+<td>8.9 B</td>
+<td>26.7</td>
+<td>8.54</td>
+<td>3.67</td>
+<td>27.1</td>
+<td>12.3</td>
+</tr>
+<tr>
+<td>REAP 48, <strong>code-only calibration</strong> (run 3)</td>
+<td>8.9 B</td>
+<td>43.8</td>
+<td>13.9</td>
+<td>3.19</td>
+<td>37.1</td>
+<td>16.4</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="run-2-keep-128-quantization-cost-and-generation-test">Run 2 (keep 128): quantization cost and generation test</h2>
+<p><code>llama-perplexity -f data/wikitext-2-test.txt -c 2048 --chunks 64</code> (different windowing
+than 05_eval.py, so compare only within this table):</p>
+<div class="tablewrap"><table class="data">
+<thead>
+<tr>
+<th>file</th>
+<th>size</th>
+<th>wikitext ppl</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>BF16</td>
+<td>35 GB</td>
+<td>8.55 +/- 0.09</td>
+</tr>
+<tr>
+<td>Q4_K_M (imatrix)</td>
+<td>11 GB</td>
+<td>8.52 +/- 0.09</td>
+</tr>
+<tr>
+<td>IQ4_XS (imatrix)</td>
+<td>9.5 GB</td>
+<td>8.51 +/- 0.09</td>
+</tr>
+</tbody>
+</table></div>
+<p>4-bit with an importance matrix costs nothing measurable; all the damage is from pruning.</p>
+<p><code>scripts/ask.py</code> (and <code>--think</code>) against llama-server with the Q4_K_M, fully on the GPU:
+all three prompts answered correctly (Canberra + reason, working iterative Fibonacci
+with explanation, 72 km/h), with and without thinking, at 155-195 tok/s. Some
+explanations are simplified or slightly off: with thinking on it said Sydney was rejected
+for being "too close to the coast and favored by New South Wales", while the main reason
+was the Sydney-Melbourne rivalry. Side-by-side outputs: <code>learn/b-answers.html</code>. The benchmark later showed what these three prompts could not: HumanEval 79.9% against 95.7% for the original (<a href="#step-2-results">step 2</a>).</p>
+<h2 id="run-1-keep-48-generation-test-llama-server-q4_k_m-180-toks-on-the-5070-ti">Run 1 (keep 48): generation test (llama-server, Q4_K_M, ~180 tok/s on the 5070 Ti)</h2>
+<div class="tablewrap"><table class="data">
+<thead>
+<tr>
+<th>prompt</th>
+<th>result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>train 180 km in 2.5 h, average speed?</td>
+<td>correct, well formatted (72 km/h)</td>
+</tr>
+<tr>
+<td>Python iterative Fibonacci</td>
+<td>fluent prose, broken code (<code>def(n) = def(n-1) + ...</code>)</td>
+</tr>
+<tr>
+<td>capital of Australia, why not Sydney?</td>
+<td>degenerates into repetition loops</td>
+</tr>
+</tbody>
+</table></div>
+<p>The BF16 GGUF fails the same way, so this is the pruning, not the 4-bit
+quantization. Perplexity 4.9 -&gt; 11.7 is "broken for general use"; math survives
+because the think-math data was 25% of calibration and its experts were kept.</p>
+<pre class="cmd"><code class="language-bash">llama.cpp/build/bin/llama-server -m gguf/q35-reap-k48/q35-reap-k48-Q4_K_M.gguf -ngl 99 -c 8192 --port 8089
+</code></pre>
+<h2 id="run-3-a-code-specialist-at-89-b">Run 3: a code specialist at 8.9 B</h2>
+<p>Run 1 showed that 48 experts calibrated on a general mix break the model. Chapter 7 says the calibration text decides
+which experts survive, so run 3 asks: if the model only needs to be good at code, does a code-only calibration keep a
+48-expert (8.9 B) model useful?</p>
+<pre class="cmd"><code class="language-bash">scripts/01_download.sh                                   # teacher back, ~2 min
+.venv/bin/python -I scripts/02_calib_data.py --preset code   # data/calib_code.pt, data/eval_code.pt
+setsid nohup scripts/run_code_sweep.sh 64 48 32 &gt; logs/code_sweep.log 2&gt;&amp;1 &amp;   # stats/code.pt + 10 evals, ~15 min
+.venv/bin/python -I scripts/04_prune.py --stats stats/code.pt --keep 48 --criterion reap --out models/q35-code-k48
+.venv/bin/python -I scripts/05_eval.py --model models/q35-code-k48 --data data/eval_code.pt --results results/eval_code.jsonl
+CALIB=data/calib_code.pt scripts/07_gguf.sh models/q35-code-k48 Q4_K_M IQ4_XS   # imatrix on code text, ~13 min
+llama.cpp/build/bin/llama-server -m gguf/q35-code-k48/q35-code-k48-Q4_K_M.gguf -ngl 99 -c 16384 --port 8089
+.venv/bin/python -I scripts/ask.py --set code --check    # 5 auto-graded coding prompts
+</code></pre>
+<p>Calibration: 3/4 Mixture-of-Thoughts code (problem, <code>&lt;think&gt;</code> trace, solution) and 1/4
+<code>python_code_instructions_18k</code> (plain "write a Python function" answers), 524k tokens like before.
+The code eval set holds out later rows of the same two datasets.</p>
+<h3 id="run-3-code-perplexity">Code perplexity (held out, lower is better)</h3>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>variant</th><th>params</th><th>py-instruct</th><th>think-code</th><th>all</th></tr></thead>
+<tbody>
+<tr><td>original, 256 experts</td><td>35 B</td><td>3.10</td><td>2.53</td><td><strong>2.80</strong></td></tr>
+<tr><td>code calibration, keep 64</td><td>11 B</td><td>3.47</td><td>2.66</td><td>3.04 (+9%)</td></tr>
+<tr><td><strong>code calibration, keep 48</strong></td><td><strong>8.9 B</strong></td><td>3.69</td><td>2.82</td><td><strong>3.23 (+15%)</strong></td></tr>
+<tr><td>code calibration, keep 32</td><td>6.9 B</td><td>4.11</td><td>3.22</td><td>3.64 (+30%)</td></tr>
+<tr><td>general calibration, keep 64</td><td>11 B</td><td>6.60</td><td>2.98</td><td>4.43 (+58%)</td></tr>
+<tr><td>general calibration, keep 48</td><td>8.9 B</td><td>7.12</td><td>3.14</td><td>4.73 (+69%)</td></tr>
+<tr><td>general calibration, keep 32</td><td>6.9 B</td><td>9.41</td><td>3.73</td><td>5.93 (+112%)</td></tr>
+</tbody></table></div>
+<p>The price is everything else. On the general eval set the code-calibrated 48-expert model scores 16.4 (web 43.8,
+wikitext 37.1) where the general-calibrated one scored 11.7.</p>
+<h3 id="run-3-graded-test">Graded coding test (<code>ask.py --set code --check</code>, 3 runs x 5 prompts)</h3>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>model</th><th>Python, unit tests (3 x 3)</th><th>SQL on sqlite (x 3)</th><th>list comprehension (x 3)</th><th>total</th></tr></thead>
+<tbody>
+<tr><td><strong>code specialist, 48 experts, 8.9 B</strong></td><td>9/9</td><td>0/3</td><td>3/3</td><td><strong>12/15</strong></td></tr>
+<tr><td>general, 128 experts, 19 B (run 2)</td><td>8/9</td><td>0/3</td><td>2/3</td><td>10/15</td></tr>
+</tbody></table></div>
+<p>15 answers per model is a small sample, so read this as "at least as good at Python with half the parameters",
+not "better". The step 2 benchmark with 164 HumanEval problems agrees: 87.2% for the code specialist against 79.9% for
+the 19 B general prune, and 95.7% for the unpruned original (<a href="#step-2-results">results</a>). Both fail every SQL attempt: neither calibration set contained SQL. Speed is the same, ~185-190 tok/s,
+because both still run 8 experts per token.</p>
+<p>What specialisation costs, in one answer. Asked "What is the capital of Australia, and why isn't it Sydney?", the
+code model replied: <em>"The capital of Australia is <strong>A</strong>. It isn't <strong>Syland</strong> (or "Sy")
+because capital letters are determined by the Unicode character encoding…"</em>. The experts it kept are the ones that
+see the word "capital" in code. (It still answered the Fibonacci and train prompts correctly.)</p>
+<p><strong>Lesson:</strong> the 9 B target that failed as a general model works as a specialist. Calibrate on what you
+want to keep, measure on held-out text of that kind, and test with graded prompts, because perplexity alone can't show
+that a model now thinks "capital" means a letter.</p>
+<h2 id="step-2-benchmarking">Step 2: benchmarking</h2>
+<p>Perplexity (concept 8) measures how well a model predicts text. It is quick and sensitive, but it cannot tell you
+whether the model can still <em>do</em> anything: the 48-expert code model has a fine code perplexity and still thinks
+"capital" means a letter. A <strong>benchmark</strong> is a fixed set of tasks with an automatic way to decide whether
+each answer is right. Three standard ones cover three different skills.
+<a href="e-benchmark.html">▶ Animated appendix E</a></p>
+
+<h3 id="gsm8k">GSM8K: grade-school math</h3>
+<p><strong>GSM8K</strong> ("Grade School Math 8K", OpenAI, 2021) is about 8,500 math word problems written by people,
+each needing 2 to 8 steps of basic arithmetic. The test split has 1,319 problems; we use the first 250. Every reference
+answer ends in a single number, so grading is exact:</p>
+<pre><code>Janet's ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins
+for her friends every day with four. She sells the remainder at the farmers' market daily for $2
+per fresh duck egg. How much in dollars does she make every day at the farmers' market?
+                                                        reference answer: 18
+</code></pre>
+<p>What it tests: following a short chain of reasoning without a slip. What it does not test: advanced math. The model is
+asked to show its steps and end with <code>#### &lt;number&gt;</code>; the grader takes that number, or the last number
+in the answer, and compares it with the reference.</p>
+
+<h3 id="humaneval">HumanEval: write a working function</h3>
+<p><strong>HumanEval</strong> (OpenAI, 2021, from the Codex paper) is 164 hand-written Python problems. Each gives a
+function signature and a docstring with examples; hidden unit tests (about 7–8 per problem) decide whether the model's
+function is correct:</p>
+<pre><code>def how_many_times(string: str, substring: str) -&gt; int:
+    """ Find how many times a given substring can be found in the original string.
+    Count overlapping cases.
+    &gt;&gt;&gt; how_many_times('aaaa', 'aa')
+    3
+    """
+</code></pre>
+<p>The score is <strong>pass@1</strong>: the share of problems whose first answer passes all tests. Grading is strict:
+our code model's answer to the problem above had correct logic but used an undefined variable
+<code>subsubstring</code>, so it fails. Running the tests means running model-written code; <code>08_bench.py</code> does
+it in a separate <code>python -I</code> process with a 10-second limit, which is fine for a local model on a fixed
+benchmark but is not a sandbox.</p>
+
+<h3 id="mmlu">MMLU: broad knowledge</h3>
+<p><strong>MMLU</strong> ("Massive Multitask Language Understanding", 2020) has about 14,000 four-choice questions from 57
+subjects, from high-school biology to law and accounting. We use a fixed random sample of 300 (54 subjects). It measures
+how much general knowledge survived, which is exactly what a code specialist gives up.</p>
+<p>How it is scored matters. Asking for "the letter only" and parsing the reply mostly measures whether the model obeys
+the format: our first attempt scored 13.7%, below the 25% of random guessing, because the parser missed answers like
+"The correct option is **B**". The standard fix, used here, is to start the answer for the model with
+<code>The correct option is **</code> and read the probability it gives to A, B, C and D as the next token. The most
+likely letter is its pick, however chatty the model is.</p>
+
+<h3 id="how-to-benchmark">How to benchmark a model</h3>
+<div class="tablewrap"><svg viewBox="0 0 900 150" role="img" aria-label="Benchmark pipeline: dataset, prompt, model server, answer, grader, score with confidence interval" style="display:block;width:100%;min-width:640px;height:auto">
+  <g font-size="12.5">
+    <rect class="box" x="4" y="30" width="120" height="70" rx="8"/><text x="64" y="58" text-anchor="middle" font-weight="600">dataset</text><text class="t-dim" x="64" y="78" text-anchor="middle" font-size="11">fixed questions</text>
+    <rect class="box" x="154" y="30" width="120" height="70" rx="8"/><text x="214" y="58" text-anchor="middle" font-weight="600">prompt</text><text class="t-dim" x="214" y="78" text-anchor="middle" font-size="11">same for all models</text>
+    <rect class="box" x="304" y="30" width="140" height="70" rx="8" style="stroke:var(--act);stroke-width:2"/><text x="374" y="58" text-anchor="middle" font-weight="600">llama-server</text><text class="t-dim" x="374" y="78" text-anchor="middle" font-size="11">greedy, thinking off</text>
+    <rect class="box" x="474" y="30" width="120" height="70" rx="8"/><text x="534" y="58" text-anchor="middle" font-weight="600">answer</text><text class="t-dim" x="534" y="78" text-anchor="middle" font-size="11">saved per item</text>
+    <rect class="box" x="624" y="30" width="120" height="70" rx="8" style="stroke:var(--keep);stroke-width:2"/><text x="684" y="58" text-anchor="middle" font-weight="600">grader</text><text class="t-dim" x="684" y="78" text-anchor="middle" font-size="11">number · tests · letter</text>
+    <rect class="box" x="774" y="30" width="120" height="70" rx="8"/><text x="834" y="58" text-anchor="middle" font-weight="600">score ± CI</text><text class="t-dim" x="834" y="78" text-anchor="middle" font-size="11">95% interval</text>
+    <path class="wire-act" d="M124,65 H154 M274,65 H304 M444,65 H474 M594,65 H624 M744,65 H774"/>
+    <text class="t-faint" x="684" y="124" text-anchor="middle" font-size="11">validated on the reference answers first</text>
+  </g>
+</svg></div>
+<ol>
+<li><strong>Pick a baseline and quantize it the same way.</strong> A pruned model only means something next to the
+model it came from. Here the baseline is the unpruned Qwen3.5-35B-A3B as a published Q4_K_M GGUF
+(<code>scripts/download_baseline.sh</code>), so every model is compared at 4 bits.</li>
+<li><strong>Fix every setting.</strong> Greedy decoding (temperature 0) makes runs reproducible; thinking off keeps them
+fast. Both lower the absolute scores compared with Qwen's published numbers, which use thinking. That is fine: the
+comparison between models is what matters, and it uses identical settings.</li>
+<li><strong>Validate the grader before trusting it.</strong> Feed it the reference answers (they must all pass) and some
+wrong ones (they must fail): 250/250, 164/164 and 300/300 here. Then look at a sample of real failures.</li>
+<li><strong>Use enough questions and report the interval.</strong> With n questions and score p, the 95% interval is
+roughly p ± 2·√(p(1−p)/n). At n = 15 that is about ±20 points, at n = 300 about ±5.</li>
+</ol>
+<pre class="cmd"><code class="language-bash">scripts/download_baseline.sh                                     # unpruned Q4_K_M, 20.5 GiB
+scripts/run_bench.sh gguf/original-unsloth/Qwen3.5-35B-A3B-Q4_K_M.gguf original-q4
+scripts/run_bench.sh gguf/q35-reap-k128/q35-reap-k128-Q4_K_M.gguf general-k128
+scripts/run_bench.sh gguf/q35-code-k48/q35-code-k48-Q4_K_M.gguf code-k48
+.venv/bin/python -I scripts/bench_report.py --js                  # table + data for appendix E
+</code></pre>
+<p><code>run_bench.sh</code> starts <code>llama-server</code> with four parallel slots, runs <code>08_bench.py</code>
+(714 questions), and stops the server. A pruned model takes about 10 minutes; the 20.5 GiB baseline does not fit in
+16 GB of VRAM, so part of it runs from system RAM and took about 30 minutes. Every answer is saved in
+<code>results/bench/&lt;model&gt;-&lt;task&gt;.jsonl</code>.</p>
+
+<h3 id="what-to-look-for">What to look for</h3>
+<ul>
+<li><strong>Overlapping intervals mean "tied".</strong> Run 3's 12/15 against 10/15 looked like a win and was noise.</li>
+<li><strong>Read the failures, not just the score.</strong> <code>bench_report.py</code> groups them: wrong result,
+undefined name (typos such as <code>subsubstring</code>, a sign of pruning damage), no code at all (rambling or loops),
+ran past the token limit.</li>
+<li><strong>Format failures are not knowledge failures.</strong> A model that ignores "letter only" is not ignorant; score
+in a way that separates the two (next-token letter scoring for MMLU).</li>
+<li><strong>Different skills move differently.</strong> A specialist can match or beat a bigger model on its domain and
+lose badly elsewhere; always include at least one benchmark outside the domain you optimised for.</li>
+<li><strong>Contamination.</strong> These benchmarks have been public since 2020–2021, so newer models may have seen them
+in training and absolute scores can be inflated. Comparing a model with its own pruned versions is still fair: they all
+saw the same data.</li>
+<li><strong>Saturation.</strong> Strong models score above 90% on GSM8K and HumanEval, so differences near the top are
+small. Harder benchmarks exist (MATH, LiveCodeBench, MMLU-Pro) when you need more resolution.</li>
+</ul>
+<h3 id="step-2-results">Results</h3>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>% correct (95% CI)</th><th>GSM8K, math</th><th>HumanEval, code</th><th>MMLU, knowledge</th></tr></thead>
+<tbody>
+<tr><td>original 35 B, unpruned (Q4_K_M)</td><td><strong>96.4</strong> (93–98)</td><td><strong>95.7</strong> (92–98)</td><td><strong>86.7</strong> (82–90)</td></tr>
+<tr><td>general prune, 128 experts, 19 B (run 2)</td><td>95.6 (92–98)</td><td>79.9 (73–85)</td><td>73.7 (68–78)</td></tr>
+<tr><td>general prune + distilled routers, 19 B (step 3)</td><td>94.8 (91–97)</td><td>81.7 (75–87)</td><td>73.3 (68–78)</td></tr>
+<tr><td>code prune, 48 experts, 8.9 B (run 3)</td><td>74.8 (69–80)</td><td>87.2 (81–92)</td><td>39.0 (34–45)</td></tr>
+</tbody></table></div>
+<p>250 GSM8K + 164 HumanEval + 300 MMLU questions per model, greedy decoding, thinking off, all three at 4 bits.
+Raw answers: <code>results/bench/</code>; table: <code>scripts/bench_report.py</code>. MMLU random guessing is 25%.</p>
+<ul>
+<li><strong>The 19 B general prune kept math and lost code and knowledge.</strong> GSM8K is tied with the original
+(intervals overlap almost completely), but HumanEval fell 16 points and MMLU 13. Its perplexity was only 20% worse and it
+answered our three test prompts correctly; the benchmark shows damage those checks could not see.</li>
+<li><strong>The 8.9 B code specialist is the best pruned coder, but not as good as the original.</strong> HumanEval 87.2
+against 79.9 for the 19 B prune (intervals overlap slightly, so "probably better") and 95.7 for the original (just
+the intervals just touch at 91.5). It lost 22 points of math and over half of its knowledge: 39% on MMLU is much closer to guessing than to 87%.</li>
+<li><strong>How they fail tells you what broke.</strong> HumanEval failures of the original: 6 wrong results, 1 ramble.
+General prune: 17 wrong results and 10 <em>invented APIs or type errors</em> (<code>'str'.zpad</code>,
+<code>from collections import dict</code>). Code prune: 11 wrong results, 6 rambles or loops and 3 <em>typos in its own
+variable names</em> (<code>subsubstring</code>). On GSM8K the code prune ran past 2,048 tokens 28 times, against 3 for the
+original: it loses the thread and keeps writing.</li>
+</ul>
+<h2 id="step-3-distillation">Step 3: distillation of the routers</h2>
+<p><a href="f-training.html">▶ Animated appendix F: one training step, a gradient-descent playground, the real loss curve</a></p>
+<p>The benchmark showed what the 19 B general prune lost: 16 points on HumanEval, 13 on MMLU. Concept 9 explained why
+the layer-wise "healing" of run 1 and 2 could not fix that: it matched hidden states inside each layer, which is not
+the same goal as predicting the next token. Step 3 does real <strong>knowledge distillation</strong>: the loss sits on the
+model's output, and its gradient flows back through all 40 layers.</p>
+
+<h3 id="training-basics">Training in five minutes</h3>
+<p>Everything so far only <em>ran</em> the model. Training <em>changes</em> its weights. One training step does four things:</p>
+<ol>
+<li><strong>Forward pass.</strong> Run a batch of text through the model and get its predictions.</li>
+<li><strong>Loss.</strong> One number that says how wrong the predictions are. Here: how far the student's next-token
+distribution is from the teacher's (cross-entropy; 0 would be a perfect copy plus a constant).</li>
+<li><strong>Backward pass (backpropagation).</strong> Work out, for every trainable weight, which direction would lower
+the loss and how strongly: the <strong>gradient</strong>. It is computed with the chain rule, from the loss back through
+every layer to the first one, which is why it is called "back" propagation.</li>
+<li><strong>Optimizer step.</strong> Move each weight a little against its gradient. The size of the move is set by the
+<strong>learning rate</strong> (here 1e-4, warmed up over 3 steps and then slowly decayed). The optimizer is
+<strong>AdamW</strong>, which adapts the step for each weight from the history of its gradients.</li>
+</ol>
+<p>Words you will meet: a <strong>batch</strong> is the text used for one step (here 32 sequences = 32k tokens); an
+<strong>epoch</strong> is one pass over all training text (here 992 sequences, so 31 steps; we run 2 epochs = 62 steps);
+the <strong>validation set</strong> is text held out from training and checked every few steps. If the training loss
+falls but the validation loss rises, the model is memorising its training text instead of learning
+(<strong>overfitting</strong>); the script keeps the routers from the step with the best validation score.
+<strong>Gradient clipping</strong> caps the size of one update so that a single odd batch cannot throw the weights off.</p>
+<p>For distillation, the "right answer" in step 2 is not the next word of the text but the teacher's whole
+distribution over next words. That is much richer: "is 62%, comma 17%, was 2%…" tells the student what the teacher
+considers plausible, not only what happened to come next.</p>
+
+<h3 id="distill-what">What is trained, and why only that</h3>
+<p>Full fine-tuning of a 19 B model needs about 300 GB of GPU memory for weights, gradients and Adam state. Instead only
+the <strong>routers</strong> are trained: 40 matrices of 128 x 2048 (10.5 M parameters) plus the 40 shared-expert gates.
+They are exactly what pruning broke. A token whose favourite experts were deleted is sent to its next choices, but the
+router was never trained to pick good substitutes from the 128 survivors; distillation teaches it. Experts, attention,
+DeltaNet and embeddings stay frozen.</p>
+
+<h3 id="distill-targets">The teacher's soft targets</h3>
+<p><code>09_teacher_logits.py</code> streams the unpruned model over 1M tokens of new training text (<code>02_calib_data.py
+--preset train</code>: the same four sources, rows not used for calibration or evaluation) and stores, for every position,
+the teacher's 32 most likely next tokens with their log-probabilities. These 32 cover 96.7% of the teacher's probability
+on average, and take 192 MB instead of the ~1 TB the full 248k-token distribution would need. The student's loss is the
+cross-entropy to this distribution (equivalently the KL divergence, plus a constant).</p>
+
+<h3 id="distill-backward">Backpropagation through a model that does not fit</h3>
+<div class="tablewrap"><svg viewBox="0 0 900 230" role="img" aria-label="Streamed forward and backward pass: forward through layers 0 to 39 saving inputs, loss at the top, backward from layer 39 to 0 recomputing each layer" style="display:block;width:100%;min-width:640px;height:auto">
+  <g font-size="12">
+    <text x="10" y="22" font-weight="600">forward (no gradients): keep every layer's input in RAM</text>
+    <rect class="box" x="10" y="34" width="70" height="40" rx="6"/><text x="45" y="59" text-anchor="middle">embed</text>
+    <rect class="box" x="110" y="34" width="70" height="40" rx="6"/><text x="145" y="59" text-anchor="middle">layer 0</text>
+    <rect class="box" x="210" y="34" width="70" height="40" rx="6"/><text x="245" y="59" text-anchor="middle">layer 1</text>
+    <text x="320" y="59" text-anchor="middle" class="t-dim">· · ·</text>
+    <rect class="box" x="360" y="34" width="70" height="40" rx="6"/><text x="395" y="59" text-anchor="middle">layer 39</text>
+    <rect class="box" x="470" y="34" width="150" height="40" rx="6" style="stroke:var(--act);stroke-width:2"/><text x="545" y="52" text-anchor="middle" font-weight="600">loss vs teacher</text><text x="545" y="67" text-anchor="middle" class="t-dim" font-size="10.5">top-32 cross-entropy</text>
+    <path class="wire-h" d="M80,54 H110 M180,54 H210 M280,54 H300 M340,54 H360 M430,54 H470"/>
+    <text x="10" y="122" font-weight="600">backward: layer 39 → 0, each reloaded, its forward recomputed with autograd on</text>
+    <rect class="box" x="360" y="134" width="70" height="40" rx="6"/><text x="395" y="159" text-anchor="middle">layer 39</text>
+    <text x="320" y="159" text-anchor="middle" class="t-dim">· · ·</text>
+    <rect class="box" x="210" y="134" width="70" height="40" rx="6"/><text x="245" y="159" text-anchor="middle">layer 1</text>
+    <rect class="box" x="110" y="134" width="70" height="40" rx="6"/><text x="145" y="159" text-anchor="middle">layer 0</text>
+    <path class="wire-cut" d="M545,74 V154 H430 M360,154 H340 M300,154 H280 M210,154 H180"/>
+    <text x="640" y="150" class="t-cut" font-size="11.5">dL/d(hidden) flows back</text>
+    <text x="640" y="168" class="t-route" font-size="11.5">dL/d(router) collected per layer</text>
+    <text x="10" y="210" class="t-faint" font-size="11">one layer on the GPU at a time (6 GB peak); the price: every layer is read from disk twice per training step</text>
+  </g>
+</svg></div>
+<p>This is gradient checkpointing taken to the extreme: one checkpoint per layer, each recomputed on its own. A training
+step of 32 sequences (32k tokens) reads the 67 GiB teacher twice, because the student is pruned on the fly from the
+teacher's files, so no 36 GiB pruned copy is needed on disk. About 135 seconds per step on this machine.</p>
+
+<h3 id="distill-gradcheck">Verifying the gradient first</h3>
+<p>A streamed backward pass is easy to get subtly wrong, so <code>10_distill.py --gradcheck</code> compares it with a
+finite difference: nudge one router along its gradient, re-run the forward pass, and see whether the loss changes as
+predicted. Result: ratio 0.99 for layer 5 (gradient through 34 layers) and 0.90 for layer 39.</p>
+<p>The first version of the check reported a 3x mismatch, a false alarm with two causes worth knowing. A step that is
+too small (0.001 spread over 262k weights) vanishes in the bf16 rounding of the weights, so the measured change is
+pure noise, sometimes with the wrong sign. A random step that is too large (0.002 per weight, a sixth of their typical
+size) switches which experts tokens pick, a jump no gradient can see. The step has to sit between the two.</p>
+
+<h3 id="distill-benefits">Benefits, costs and limits</h3>
+<div class="tablewrap"><table class="data">
+<thead><tr><th></th><th>what it means here</th></tr></thead>
+<tbody>
+<tr><td><strong>Benefit</strong></td><td>Recovers quality without changing size or speed: same 19 B parameters, same 128 experts, same ~3 B active per token. Only 42 MB of router weights change.</td></tr>
+<tr><td><strong>Benefit</strong></td><td>Learns from the teacher's full distribution, which carries far more information per token than plain text, so it needs much less data than training from scratch.</td></tr>
+<tr><td><strong>Benefit</strong></td><td>No new files to quantize: the routers are patched into the existing GGUF (they are stored unquantized).</td></tr>
+<tr><td><strong>Cost</strong></td><td>Compute: every step reads the whole model twice. 62 steps took about 2.5 hours here; a GPU with 80 GB would hold the student and do the same in minutes.</td></tr>
+<tr><td><strong>Limit</strong></td><td>Only the routers learn. Knowledge that lived in the 128 deleted experts is gone; the routers can only send tokens to the best of what is left. Recovering that would need training the experts too.</td></tr>
+<tr><td><strong>Limit</strong></td><td>Scale: 1M tokens is about 1/100,000 of what NVIDIA recommends for full recovery (80–100 B tokens). Expect a partial improvement, not the original model back.</td></tr>
+<tr><td><strong>Limit</strong></td><td>Data: the student only learns what the training text shows. Our four sources match the calibration mix; another language or domain would need its own text.</td></tr>
+</tbody></table></div>
+<p>A known flaw in this run: the validation set was the last 32 sequences of the training file, which is ordered by
+source, so it contained only code-reasoning text. It is still held out, but it tracks one domain. The script now spreads
+the validation sequences evenly; the real check is the held-out eval set and the benchmark below.</p>
+
+<pre class="cmd"><code class="language-bash">scripts/01_download.sh                                         # the teacher
+.venv/bin/python -I scripts/02_calib_data.py --preset train    # data/train.pt, 1M tokens
+.venv/bin/python -I scripts/09_teacher_logits.py               # data/teacher_top32.pt, ~6 min
+.venv/bin/python -I scripts/10_distill.py --gradcheck          # must report ratios near 1
+setsid nohup .venv/bin/python -I scripts/10_distill.py &gt; logs/10_distill.log 2&gt;&amp;1 &amp;   # ~2.5 h
+.venv/bin/python -I scripts/05_eval.py --stats stats/calib.pt --keep 128 --routers results/distill/routers.pt
+.venv/bin/python -I scripts/11_patch_gguf.py gguf/q35-reap-k128/q35-reap-k128-Q4_K_M.gguf \
+    results/distill/routers.pt gguf/q35-distill-k128/q35-distill-k128-Q4_K_M.gguf
+scripts/run_bench.sh gguf/q35-distill-k128/q35-distill-k128-Q4_K_M.gguf distill-k128
+</code></pre>
+<p><code>11_patch_gguf.py</code> avoids a full conversion: llama.cpp stores routers unquantized (F32), so the trained
+ones are written into a copy of the existing Q4_K_M file and every quantized expert stays byte-identical. It first
+checks that the file's current routers equal the untrained ones, which proves the experts are in the same order.</p>
+<h3 id="step-3-results">Results</h3>
+<p>62 steps (2 epochs over 1M tokens) took 144 minutes. The held-out validation KL to the teacher fell from 0.1047 to
+0.0859 (<strong>−18%</strong>); most of it in the first 24 steps, the last 14 steps added almost nothing
+(<a href="f-training.html">curve in appendix F</a>).</p>
+<div class="tablewrap"><table class="data">
+<thead><tr><th></th><th>before distillation</th><th>after</th><th>change</th></tr></thead>
+<tbody>
+<tr><td>KL to teacher (validation)</td><td>0.1047</td><td>0.0859</td><td><strong>−18%</strong></td></tr>
+<tr><td>perplexity, all domains (original 4.92)</td><td>5.916</td><td>5.879</td><td>−0.6%</td></tr>
+<tr><td>… chat</td><td>4.451</td><td>4.358</td><td>−2.1%</td></tr>
+<tr><td>… reasoning</td><td>2.605</td><td>2.572</td><td>−1.3%</td></tr>
+<tr><td>… web</td><td>10.61</td><td>10.69</td><td>+0.8%</td></tr>
+<tr><td>… wikitext</td><td>9.96</td><td>9.97</td><td>±0</td></tr>
+<tr><td>GSM8K (original 96.4%)</td><td>95.6% (92–98)</td><td>94.8% (91–97)</td><td>within noise</td></tr>
+<tr><td>HumanEval (original 95.7%)</td><td>79.9% (73–85)</td><td>81.7% (75–87)</td><td>+1.8, within noise</td></tr>
+<tr><td>MMLU (original 86.7%)</td><td>73.7% (68–78)</td><td>73.3% (68–78)</td><td>within noise</td></tr>
+</tbody></table></div>
+<p>So distillation did what it was asked, and the student moved 18% closer to the teacher on the text it was measured on,
+but that closed only about 4% of the perplexity gap to the original (5.92 → 5.88, where the original is 4.92), and no
+benchmark moved beyond its confidence interval. The HumanEval failures shifted a little in kind: invented APIs went from
+10 to 6 and rambles from 4 to 3, while wrong results stayed at 17–18. The distilled model looks slightly more coherent,
+not more often correct.</p>
+<p>Why so little, and what would help:</p>
+<ul>
+<li><strong>The routers can only choose among what is left.</strong> The knowledge in the 128 deleted experts per layer is
+gone; better routing sends tokens to the best survivors, but cannot recreate a missing specialist. That ceiling is why the
+gain flattened after ~24 steps. Recovering more needs trainable experts too (e.g. LoRA adapters on them), which needs
+much more memory and data.</li>
+<li><strong>Data scale.</strong> 1M tokens, seen twice, is about 1/100,000 of NVIDIA's recommended budget. The second epoch
+added almost nothing, so the next lever is more and more varied text, not more steps.</li>
+<li><strong>Validation was narrow.</strong> In this run the validation set was code-reasoning text only (fixed in the script
+since); the held-out eval shows the gain was uneven across domains (chat and reasoning improved, web did not).</li>
+</ul>
+<h2 id="inside-the-experts">Inside the experts: what does each one handle?</h2>
+<p><a href="g-experts.html">▶ Appendix G: browse all 10,240 experts, their tokens and example contexts</a></p>
+<p>Nobody tells an expert what to specialise in. During training the router and the experts shape each other: once an
+expert happens to be slightly better at some kind of token, the router sends it more of those tokens, the expert gets more
+practice on them, and it becomes better still. Specialisation <em>emerges</em>. Which specialities exist, and where, can
+only be found by watching the trained model work.</p>
+
+<h3 id="experts-how">How to find an expert's speciality</h3>
+<ol>
+<li><strong>Record the routing.</strong> Run text through the model and save, for every token in every layer, which 8
+experts the router picked. <code>12_expert_tokens.py</code> does this in one streamed pass over the 524k calibration
+tokens: 40 layers x 524k tokens x 8 picks, 335 MB.</li>
+<li><strong>Count which tokens each expert received.</strong></li>
+<li><strong>Rank by lift, not by count.</strong> By raw count, almost every expert's top tokens are "the", ",", " of",
+because those are everywhere. Lift corrects for that:
+<pre><code>lift(token, expert) = share of this token among the expert's tokens
+                      ÷ share of this token in all text</code></pre>
+A lift of 30 means the token is 30 times more common in this expert's diet than in ordinary text. Tokens seen fewer than
+20 times are ignored, because a token that appears twice can reach a huge lift by luck.</li>
+<li><strong>Read examples in context.</strong> A token list is a hint; the surrounding text shows what the expert is
+really reacting to (the word "capital" in a geography question and in <code>str.capitalize()</code> are different jobs).</li>
+</ol>
+<pre class="cmd"><code class="language-bash">.venv/bin/python -I scripts/12_expert_tokens.py              # GPU pass (~4 min) + analysis
+.venv/bin/python -I scripts/12_expert_tokens.py --analyse    # re-run the analysis only
+</code></pre>
+
+<h3 id="experts-found">What we found</h3>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>layer · expert</th><th>its most characteristic tokens (by lift)</th><th>reading</th></tr></thead>
+<tbody>
+<tr><td>5 · 39</td><td>equation, substitution, equations, quadratic</td><td>algebra</td></tr>
+<tr><td>5 · 50</td><td><code>#</code>, <code>--</code>, function, code</td><td>code comments</td></tr>
+<tr><td>20 · 97</td><td>sustainability, economic, carbon, countries</td><td>economics and environment</td></tr>
+<tr><td>20 · 241</td><td>membrane, drug, blood, cells, sensors</td><td>biology and medicine</td></tr>
+<tr><td>20 · 109</td><td>family, people, her, they, their</td><td>people and relationships</td></tr>
+<tr><td>35 · 204</td><td><code>&lt;/think&gt;</code>, <code>&lt;think&gt;</code>, <code>$$</code>, <code>\</code></td><td>reasoning and LaTeX structure</td></tr>
+<tr><td>36 · 173</td><td>","</td><td>no speciality (best lift 0.9)</td></tr>
+</tbody></table></div>
+<ul>
+<li><strong>Specialisation is everywhere.</strong> The median expert's most characteristic token has a lift of 25–30, in
+every quarter of the model; 12–17% of experts have a token with lift above 50.</li>
+<li><strong>Early layers react to words, late layers to structure.</strong> Layer 5 and 20 experts follow topics
+(algebra, biology); layer 35 expert 204 tracks the model's own thinking tags and math notation.</li>
+<li><strong>Workloads are very uneven.</strong> The quietest expert received 60 token-slots, the median about 13,750, the
+busiest 211,626: a generalist consulted by 40% of all tokens, next to specialists that see almost nothing.</li>
+</ul>
+
+<h3 id="experts-caveats">Reading these lists carefully</h3>
+<ul>
+<li><strong>Correlation, not proof.</strong> "Receives biology words" does not prove "is needed for biology". The causal
+test is to remove the expert and measure the damage on biology text, which is exactly what pruning does.
+<a href="#step-5-ablation-merging">Step 5</a> ran it: one expert alone barely matters (the "biology" one hurt chemistry
+by 0.13%), while a team of 4 biology experts per layer costs biology 31%.</li>
+<li><strong>Experts work in teams.</strong> Each token uses 8 experts at once; a speciality is often shared by several, and
+one expert can serve unrelated jobs that happen to look alike to the router.</li>
+<li><strong>The text decides what you can see.</strong> Our calibration text has no Polish and no SQL, so experts for those
+cannot show up here, and they are also the ones a pruning with this calibration deletes first (run 3 failed every SQL
+question).</li>
+</ul>
+
+<h3 id="experts-pruning">What it means for pruning</h3>
+<p>Specialists are, almost by definition, rarely used, and that puts them at the edge of every prune. Their ranks among the
+256 experts of their layer (<code>stats/calib.pt</code>), and whether the 128-expert prune of run 2 kept them:</p>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>specialist</th><th>frequency rank</th><th>REAP rank</th><th>kept by frequency</th><th>kept by REAP</th></tr></thead>
+<tbody>
+<tr><td>layer 20 · 241, biology</td><td>229</td><td><strong>2</strong></td><td>no</td><td><strong>yes</strong></td></tr>
+<tr><td>layer 5 · 39, algebra</td><td>254</td><td>145</td><td>no</td><td>no</td></tr>
+<tr><td>layer 5 · 50, code comments</td><td>255</td><td>131</td><td>no</td><td>no</td></tr>
+<tr><td>layer 35 · 204, think/LaTeX</td><td>225</td><td>174</td><td>no</td><td>no</td></tr>
+</tbody></table></div>
+<p>REAP rescues some specialists (biology jumps from 229th to 2nd, because when it fires it dominates the output), which is
+part of why REAP won every comparison. But most named specialists still rank just below the cut, so the 19 B prune deleted
+them. That fits the benchmark: knowledge (MMLU −13) and code (HumanEval −16) lost most, while general fluency and simple
+math, which many busy experts share, survived. It also explains the ceiling of step 3: distilled routers can send algebra
+tokens to the best remaining experts, but the algebra expert itself is gone.</p>
+
+<h2 id="k-per-layer">A different K per layer</h2>
+<p>Every layer above got the same number of experts. But layers might differ: maybe some can lose most of their experts
+and others cannot. If so, the same total budget, shared out unevenly, should do better. <code>13_layer_sensitivity.py</code>
+measured it: prune <em>only</em> layer L to 32 experts, leave the other 39 complete, and see how much perplexity rises.
+40 measurements on 32 training sequences (not the eval set, which scores the result later), 14 minutes.</p>
+<div class="tablewrap"><svg viewBox="0 0 900 240" role="img" aria-label="Perplexity increase when each layer alone is pruned to 32 experts" style="display:block;width:100%;min-width:640px;height:auto"><g font-size="11"><rect x="46" y="169.1" width="844" height="21.9" fill="var(--grid)"/><text class="t-faint" x="46" y="232">grey band: noise of the measurement, ±0.3%</text><rect class="f-ink3" x="50" y="176.9" width="16" height="3.1" rx="2"/><text class="t-faint" x="58" y="214" text-anchor="middle" font-size="10">0</text><rect class="f-cut" x="71" y="121.1" width="16" height="58.9" rx="2"/><rect class="f-act" x="92" y="142.6" width="16" height="37.4" rx="2"/><rect class="f-act" x="113" y="155.3" width="16" height="24.7" rx="2"/><rect class="f-ink3" x="134" y="180.0" width="16" height="9.8" rx="2"/><rect class="f-act" x="155" y="158.6" width="16" height="21.4" rx="2"/><text class="t-faint" x="163" y="214" text-anchor="middle" font-size="10">5</text><rect class="f-ink3" x="176" y="180.0" width="16" height="5.5" rx="2"/><rect class="f-ink3" x="197" y="180.0" width="16" height="5.4" rx="2"/><rect class="f-ink3" x="218" y="169.7" width="16" height="10.3" rx="2"/><rect class="f-ink3" x="239" y="177.7" width="16" height="2.3" rx="2"/><rect class="f-ink3" x="260" y="168.2" width="16" height="11.8" rx="2"/><text class="t-faint" x="268" y="214" text-anchor="middle" font-size="10">10</text><rect class="f-act" x="281" y="133.9" width="16" height="46.1" rx="2"/><rect class="f-act" x="302" y="150.2" width="16" height="29.8" rx="2"/><rect class="f-act" x="323" y="153.1" width="16" height="26.9" rx="2"/><rect class="f-ink3" x="344" y="168.9" width="16" height="11.1" rx="2"/><rect class="f-ink3" x="365" y="166.3" width="16" height="13.7" rx="2"/><text class="t-faint" x="373" y="214" text-anchor="middle" font-size="10">15</text><rect class="f-act" x="386" y="145.0" width="16" height="35.0" rx="2"/><rect class="f-act" x="407" y="155.3" width="16" height="24.7" rx="2"/><rect class="f-act" x="428" y="152.0" width="16" height="28.0" rx="2"/><rect class="f-ink3" x="449" y="168.9" width="16" height="11.1" rx="2"/><rect class="f-ink3" x="470" y="163.1" width="16" height="16.9" rx="2"/><text class="t-faint" x="478" y="214" text-anchor="middle" font-size="10">20</text><rect class="f-ink3" x="491" y="164.4" width="16" height="15.6" rx="2"/><rect class="f-act" x="512" y="156.3" width="16" height="23.7" rx="2"/><rect class="f-ink3" x="533" y="162.9" width="16" height="17.1" rx="2"/><rect class="f-ink3" x="554" y="162.9" width="16" height="17.1" rx="2"/><rect class="f-act" x="575" y="154.1" width="16" height="25.9" rx="2"/><text class="t-faint" x="583" y="214" text-anchor="middle" font-size="10">25</text><rect class="f-act" x="596" y="149.6" width="16" height="30.4" rx="2"/><rect class="f-act" x="617" y="160.5" width="16" height="19.5" rx="2"/><rect class="f-act" x="638" y="157.2" width="16" height="22.8" rx="2"/><rect class="f-act" x="659" y="140.5" width="16" height="39.5" rx="2"/><rect class="f-act" x="680" y="149.0" width="16" height="31.0" rx="2"/><text class="t-faint" x="688" y="214" text-anchor="middle" font-size="10">30</text><rect class="f-act" x="701" y="152.7" width="16" height="27.3" rx="2"/><rect class="f-act" x="722" y="142.7" width="16" height="37.3" rx="2"/><rect class="f-cut" x="743" y="103.6" width="16" height="76.4" rx="2"/><rect class="f-cut" x="764" y="122.0" width="16" height="58.0" rx="2"/><rect class="f-act" x="785" y="128.8" width="16" height="51.2" rx="2"/><text class="t-faint" x="793" y="214" text-anchor="middle" font-size="10">35</text><rect class="f-act" x="806" y="125.9" width="16" height="54.1" rx="2"/><rect class="f-cut" x="827" y="120.5" width="16" height="59.5" rx="2"/><rect class="f-cut" x="848" y="114.3" width="16" height="65.7" rx="2"/><rect class="f-cut" x="869" y="30.0" width="16" height="150.0" rx="2"/><line x1="46" x2="890" y1="180" y2="180" stroke="var(--ink3)"/><text class="t-dim" x="46" y="20">perplexity increase when ONLY this layer is pruned to 32 experts (max 4.1%, layer 39)</text><text class="t-dim" x="890" y="232" text-anchor="end">layer</text></g></svg></div>
+<ul>
+<li><strong>Late layers are the most sensitive.</strong> Layer 39 alone costs +4.1%, layers 33–38 about +1.4–2.1%. The
+first layers matter too (layer 1: +1.6%). Several middle layers cost under 0.4%, inside the noise.</li>
+<li><strong>The statistics predicted the opposite.</strong> An allocation computed from REAP contributions alone wanted the
+<em>fewest</em> experts in late layers (104 in layer 37) and the most in layer 1. Contribution inside a layer and damage to
+the output are different things; this is why sensitivity has to be measured.</li>
+</ul>
+<p>The script then shared each budget out in proportion to √sensitivity (between 16 and 256 per layer) and the result was
+scored on the held-out eval set:</p>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>average experts per layer</th><th>uniform (REAP)</th><th>allocated by sensitivity</th></tr></thead>
+<tbody>
+<tr><td>48</td><td>11.715</td><td>11.717 (no difference)</td></tr>
+<tr><td>128</td><td><strong>5.916</strong></td><td>6.133 (3.7% worse)</td></tr>
+</tbody></table></div>
+<p><strong>It did not help, and the reasons are the lesson.</strong></p>
+<ul>
+<li><strong>Noise was treated as signal.</strong> Layers 4, 6 and 7 measured slightly <em>negative</em> sensitivity, which is
+noise (32 sequences give about ±0.3%). The rule read that as "safe" and gave them the minimum of 16 experts.</li>
+<li><strong>It extrapolated beyond what was measured.</strong> Sensitivity was measured at 32 experts, then used to justify
+16. Damage is not linear in K: a layer that loses little at 32 can collapse at 16.</li>
+<li><strong>The most sensitive layer hit the ceiling.</strong> At the 128 budget, layer 39 already got all 256 experts, so
+the budget could not follow the need further.</li>
+</ul>
+<p>Doing it properly would mean measuring a damage curve per layer (several K each), using more text to shrink the noise,
+allocating by marginal damage, and keeping every layer within, say, ±50% of uniform. And a model with a different K per
+layer cannot be saved as a standard HF or GGUF file (both hold one <code>num_experts</code>), so it would need padding
+(no memory saved) or custom loader code. Here it stays an experiment.</p>
+<pre class="cmd"><code class="language-bash">.venv/bin/python -I scripts/13_layer_sensitivity.py            # 40 single-layer tests + allocations, ~15 min
+.venv/bin/python -I scripts/05_eval.py --stats stats/calib.pt --keep-file results/alloc_k128.json
+</code></pre>
+
+<h2 id="step-4-quantization-curve">Step 4: the quantization curve</h2>
+<p><a href="h-quant.html">▶ Animated appendix H: the curve, a quant-name decoder, and a "what fits my GPU" picker</a></p>
+<p>Run 2 found that 4-bit quantization cost nothing measurable. That raises the practical questions anyone choosing a model
+file faces: how far down can you go before it does cost something? Is 8-bit worth twice the memory of 4-bit? And for the bytes
+a GPU holds, is a smaller model at more bits better than a bigger model at fewer bits? Step 4 measures all of it on the
+19 B general model: nine quantization types from 8 bits per weight down to 2, plus the original 35 B squeezed to the
+same file size.</p>
+
+<h3 id="quant-types">The types, decoded</h3>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>type</th><th>nominal bits per weight</th><th>this file</th><th>how it works</th></tr></thead>
+<tbody>
+<tr><td>BF16</td><td>16</td><td>16.02</td><td>the unquantized reference</td></tr>
+<tr><td>Q8_0</td><td>8.5</td><td>8.52</td><td>legacy block quant: 32 weights share one scale ("_0": no offset). Close to lossless</td></tr>
+<tr><td>Q6_K</td><td>6.56</td><td>6.58</td><td>k-quant: blocks inside super-blocks of 256, whose scales are themselves quantized</td></tr>
+<tr><td>Q5_K_M</td><td>≈ 5.7</td><td>5.72</td><td>5-bit k-quant; "M" = medium mix, sensitive tensors (parts of attention and down projections) get 6 bits</td></tr>
+<tr><td>Q4_K_M</td><td>≈ 4.8</td><td>4.91</td><td>4-bit k-quant, medium mix: the common default</td></tr>
+<tr><td>IQ4_XS</td><td>4.25</td><td>4.37</td><td>i-quant: 16 non-uniform levels, denser near zero (concept 10)</td></tr>
+<tr><td>Q3_K_M</td><td>≈ 3.9</td><td>3.91</td><td>3-bit k-quant, medium mix</td></tr>
+<tr><td>IQ3_XXS</td><td>3.06</td><td>3.20</td><td>i-quant using lattice codebooks: groups of weights are matched against a fixed set of good patterns</td></tr>
+<tr><td>IQ2_M / IQ2_XXS</td><td>2.7 / 2.06</td><td>2.77 / 2.28</td><td>2-bit i-quants; only usable with an importance matrix</td></tr>
+</tbody></table></div>
+<p>"This file" is measured: file size x 8 / 18.54 B parameters. It is higher than the type's nominal value, because some tensors (embeddings, norms, the
+routers, which stay F32) are kept at higher precision. llama.cpp's own quick reference:
+<code>llama.cpp/build/bin/llama-quantize --help</code>.</p>
+
+<h3 id="quant-measure">Four measurements per type</h3>
+<ul>
+<li><strong>KL divergence to BF16</strong> (16 x 2048 wikitext tokens). The BF16 model's full next-token distribution for
+every token is saved once (an 8 GB reference file); each quantized version is compared against it token by token. The most
+sensitive measure: it sees every probability, not just the right answer. Reported with it: "same top token", how often
+both models' most likely next token is the same.</li>
+<li><strong>Perplexity</strong> on wikitext (64 x 2048 tokens), the same setting as the earlier BF16 8.55 / Q4_K_M 8.52.</li>
+<li><strong>Speed</strong>: tokens per second for one request (<code>speed_test.py</code>), a ~1,500-token prompt and 256
+generated tokens, with the server's own timings.</li>
+<li><strong>Benchmarks</strong>: the 714 questions of step 2, for every type that fits on the GPU (Q8_0 and Q6_K do not;
+their KL divergence shows whether they differ at all).</li>
+</ul>
+
+<h3 id="quant-how">How it was run</h3>
+<pre class="cmd"><code class="language-bash"># the BF16 GGUF of the 19 B model (scratch files on the F: drive, see below)
+.venv/bin/python -I scripts/04_prune.py --keep 128 --criterion reap --out /mnt/f/qwen-scratch/q35-reap-k128
+.venv/bin/python llama.cpp/convert_hf_to_gguf.py /mnt/f/qwen-scratch/q35-reap-k128 --outtype bf16 --no-mtp \
+    --outfile gguf/quant-sweep/q128-BF16.gguf
+# every type: quantize with run 2's imatrix, measure, delete (one at a time, for disk)
+NO_BENCH_TYPES="Q8_0 Q6_K" scripts/14_quant_sweep.sh gguf/quant-sweep/q128-BF16.gguf gguf/q35-reap-k128/imatrix.gguf q128 \
+    Q8_0 Q6_K Q5_K_M Q4_K_M IQ4_XS Q3_K_M IQ3_XXS IQ2_M IQ2_XXS
+# the original 35 B at about the same file sizes (published GGUFs)
+scripts/download_baseline.sh Qwen3.5-35B-A3B-UD-IQ2_M.gguf
+N_PARAMS=34.6e9 scripts/15_measure_gguf.sh gguf/original-unsloth/Qwen3.5-35B-A3B-UD-IQ2_M.gguf orig UD-IQ2_M
+.venv/bin/python -I scripts/quant_report.py --js                 # table + data for appendix H
+</code></pre>
+<p>Disk was the hard constraint: the pruned checkpoint (36 GB) and the BF16 GGUF (35 GB) do not fit next to everything else
+on WSL's virtual disk. The checkpoint was rebuilt on the Windows F: drive (<code>/mnt/f</code>, ~300 MB/s, fine for a file
+written once and read once), the original model was deleted after that, and each quantized file was measured and deleted
+before the next was made. The importance matrix from run 2 was reused: it belongs to exactly this model.</p>
+<h3 id="step-4-results">Results</h3>
+<p>The whole sweep took 2 hours 26 minutes (17:34 to 20:00): about 10 minutes per type, most of it the benchmarks.
+Logs: <code>logs/step4.log</code>, <code>logs/quant/</code>; rows: <code>results/quant/sweep.jsonl</code>,
+<code>results/speed.jsonl</code>, <code>results/bench.jsonl</code>; table: <code>scripts/quant_report.py</code>.</p>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>19 B pruned</th><th>GiB</th><th>bits / weight</th><th>KL to BF16</th><th>same top token</th><th>perplexity</th><th>gen tok/s</th><th>GSM8K</th><th>HumanEval</th><th>MMLU</th></tr></thead>
+<tbody>
+<tr><td>BF16</td><td>34.57</td><td>16.02</td><td>0</td><td>100%</td><td>8.554</td><td>20</td><td>–</td><td>–</td><td>–</td></tr>
+<tr><td>Q8_0</td><td>18.39</td><td>8.52</td><td>0.0081</td><td>97.3%</td><td>8.559</td><td>54</td><td>–</td><td>–</td><td>–</td></tr>
+<tr><td>Q6_K</td><td>14.21</td><td>6.58</td><td>0.0098</td><td>96.5%</td><td>8.572</td><td>108</td><td>–</td><td>–</td><td>–</td></tr>
+<tr><td>Q5_K_M</td><td>12.35</td><td>5.72</td><td>0.0177</td><td>95.2%</td><td>8.596</td><td>186</td><td>96.8</td><td>83.5</td><td>73.3</td></tr>
+<tr><td>Q4_K_M</td><td>10.59</td><td>4.91</td><td>0.0279</td><td>93.5%</td><td>8.522</td><td>212</td><td>95.2</td><td>78.7</td><td>74.3</td></tr>
+<tr><td>IQ4_XS</td><td>9.43</td><td>4.37</td><td>0.0308</td><td>92.9%</td><td>8.513</td><td>202</td><td>94.4</td><td>82.3</td><td>74.7</td></tr>
+<tr><td>Q3_K_M</td><td>8.43</td><td>3.91</td><td>0.0736</td><td>88.7%</td><td>8.522</td><td>200</td><td>96.0</td><td>79.3</td><td>73.0</td></tr>
+<tr><td>IQ3_XXS</td><td>6.91</td><td>3.20</td><td>0.104</td><td>86.4%</td><td>9.422</td><td>199</td><td>95.2</td><td>80.5</td><td><strong>69.0</strong></td></tr>
+<tr><td>IQ2_M</td><td>5.97</td><td>2.77</td><td>0.181</td><td>81.3%</td><td>10.23</td><td>200</td><td>92.4</td><td><strong>70.7</strong></td><td><strong>66.0</strong></td></tr>
+<tr><td>IQ2_XXS</td><td>4.91</td><td>2.28</td><td>0.334</td><td>74.8%</td><td>11.76</td><td>203</td><td><strong>82.0</strong></td><td><strong>54.3</strong></td><td><strong>60.0</strong></td></tr>
+</tbody></table></div>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>35 B original</th><th>GiB</th><th>bits / weight</th><th>perplexity</th><th>gen tok/s</th><th>GSM8K</th><th>HumanEval</th><th>MMLU</th><th>average</th></tr></thead>
+<tbody>
+<tr><td>Q4_K_M (step 2)</td><td>20.5</td><td>5.09</td><td>–</td><td>–</td><td>96.4</td><td>95.7</td><td>86.7</td><td>92.9</td></tr>
+<tr><td>UD-IQ3_XXS</td><td>12.18</td><td>3.02</td><td>6.037</td><td>173</td><td>96.0</td><td>95.7</td><td>85.0</td><td><strong>92.2</strong></td></tr>
+<tr><td>UD-IQ2_M</td><td>10.61</td><td>2.63</td><td>6.299</td><td>185</td><td>96.4</td><td>92.7</td><td>85.0</td><td><strong>91.4</strong></td></tr>
+<tr><td><em>19 B pruned, Q4_K_M</em></td><td><em>10.59</em></td><td><em>4.91</em></td><td><em>8.522</em></td><td><em>212</em></td><td><em>95.2</em></td><td><em>78.7</em></td><td><em>74.3</em></td><td><em>82.7</em></td></tr>
+</tbody></table></div>
+<p>Benchmark scores are % correct; their 95% intervals are about ±3 points for GSM8K, ±6 for HumanEval and ±5 for MMLU
+(the exact ones are in appendix H). Perplexity is wikitext, 64 x 2048 tokens; KL and "same top token" are against the
+19 B BF16 on 16 x 2048 wikitext tokens. "UD" files are Unsloth's "dynamic" quantizations: they pick a type per tensor
+(more bits for the sensitive ones) instead of one type for the whole model. The 35 B has no KL column: it would need its
+own BF16 reference, a 67 GiB file running at a few tokens per second.</p>
+<div class="tablewrap"><svg viewBox="0 0 900 300" role="img" aria-label="Average benchmark score against file size: the pruned 19 B model at nine quantizations and the original 35 B at three" style="display:block;width:100%;min-width:640px;height:auto"><g font-size="11"><rect x="60.0" y="40" width="432.8" height="210" fill="var(--keep-soft)" opacity="0.6"/><text class="t-dim" x="486.8" y="54" text-anchor="end">runs fully on a 16 GB GPU, with context</text><line x1="60" x2="880" y1="250.0" y2="250.0" stroke="var(--grid)"/><text class="t-faint" x="52" y="254.0" text-anchor="end" font-size="10">60</text><line x1="60" x2="880" y1="197.5" y2="197.5" stroke="var(--grid)"/><text class="t-faint" x="52" y="201.5" text-anchor="end" font-size="10">70</text><line x1="60" x2="880" y1="145.0" y2="145.0" stroke="var(--grid)"/><text class="t-faint" x="52" y="149.0" text-anchor="end" font-size="10">80</text><line x1="60" x2="880" y1="92.5" y2="92.5" stroke="var(--grid)"/><text class="t-faint" x="52" y="96.5" text-anchor="end" font-size="10">90</text><line x1="60" x2="880" y1="40.0" y2="40.0" stroke="var(--grid)"/><text class="t-faint" x="52" y="44.0" text-anchor="end" font-size="10">100</text><text class="t-faint" x="60.0" y="266" text-anchor="middle" font-size="10">4</text><text class="t-faint" x="151.1" y="266" text-anchor="middle" font-size="10">6</text><text class="t-faint" x="242.2" y="266" text-anchor="middle" font-size="10">8</text><text class="t-faint" x="333.3" y="266" text-anchor="middle" font-size="10">10</text><text class="t-faint" x="424.4" y="266" text-anchor="middle" font-size="10">12</text><text class="t-faint" x="515.6" y="266" text-anchor="middle" font-size="10">14</text><text class="t-faint" x="606.7" y="266" text-anchor="middle" font-size="10">16</text><text class="t-faint" x="697.8" y="266" text-anchor="middle" font-size="10">18</text><text class="t-faint" x="788.9" y="266" text-anchor="middle" font-size="10">20</text><text class="t-faint" x="880.0" y="266" text-anchor="middle" font-size="10">22</text><line x1="60" x2="880" y1="250" y2="250" stroke="var(--ink3)"/><text class="t-dim" x="880" y="284" text-anchor="end">file size, GiB</text><text class="t-dim" x="60" y="24">average of GSM8K, HumanEval, MMLU (%)</text><path d="M101.5,221.5 L149.7,164.1 L192.6,136.8 L261.8,130.5 L307.4,125.1 L360.2,130.6 L440.4,121.2" fill="none" stroke="var(--h)" stroke-width="2.2"/><circle cx="101.5" cy="221.5" r="5" fill="var(--h)"/><text x="101.5" y="211.5" text-anchor="middle" font-size="10" fill="var(--h)">IQ2_XXS 65.4</text><circle cx="149.7" cy="164.1" r="5" fill="var(--h)"/><text x="149.7" y="154.1" text-anchor="middle" font-size="10" fill="var(--h)">IQ2_M 76.4</text><circle cx="192.6" cy="136.8" r="5" fill="var(--h)"/><text x="192.6" y="126.8" text-anchor="middle" font-size="10" fill="var(--h)">IQ3_XXS 81.6</text><circle cx="261.8" cy="130.5" r="5" fill="var(--h)"/><text x="261.8" y="146.5" text-anchor="middle" font-size="10" fill="var(--h)">Q3_K_M 82.8</text><circle cx="307.4" cy="125.1" r="5" fill="var(--h)"/><text x="307.4" y="115.1" text-anchor="middle" font-size="10" fill="var(--h)">IQ4_XS 83.8</text><circle cx="360.2" cy="130.6" r="5" fill="var(--h)"/><text x="360.2" y="146.6" text-anchor="middle" font-size="10" fill="var(--h)">Q4_K_M 82.7</text><circle cx="440.4" cy="121.2" r="5" fill="var(--h)"/><text x="440.4" y="111.2" text-anchor="middle" font-size="10" fill="var(--h)">Q5_K_M 84.5</text><path d="M361.1,85.3 L432.6,80.8 L811.7,77.1" fill="none" stroke="var(--act)" stroke-width="2.2"/><circle cx="361.1" cy="85.3" r="5" fill="var(--act)"/><text x="361.1" y="101.3" text-anchor="middle" font-size="10" fill="var(--act)">UD-IQ2_M 91.4</text><circle cx="432.6" cy="80.8" r="5" fill="var(--act)"/><text x="432.6" y="70.8" text-anchor="middle" font-size="10" fill="var(--act)">UD-IQ3_XXS 92.2</text><circle cx="811.7" cy="77.1" r="5" fill="var(--act)"/><text x="811.7" y="67.1" text-anchor="middle" font-size="10" fill="var(--act)">Q4_K_M 92.9</text><circle cx="72" cy="286" r="5" fill="var(--h)"/><text class="t-dim" x="82" y="290">19 B pruned (run 2), quantized by us</text><circle cx="342" cy="286" r="5" fill="var(--act)"/><text class="t-dim" x="352" y="290">35 B original (Unsloth GGUFs)</text></g></svg></div>
+<p>The chart is the whole step in one picture. Every blue point (the pruned model) is below every amber one (the original),
+including the amber points that are smaller files.</p>
+
+<h3 id="quant-findings">What the numbers say</h3>
+<ul>
+<li><strong>At the same file size, the bigger model at fewer bits wins, and by a lot.</strong> The 35 B at 2.6 bits per
+weight (10.61 GiB) and the 19 B at 4.9 bits (10.59 GiB) are the same size. The 35 B scores 91.4 on average, the 19 B 82.7:
+14 points better on HumanEval and 11 on MMLU, both well outside the intervals. Quantization keeps every weight and makes
+each one less precise; pruning deletes half the experts and everything they knew. The model degrades gracefully under the
+first and not under the second. (One model and one pair of sizes: a strong result, not a law.)</li>
+<li><strong>KL divergence sees damage that perplexity hides.</strong> From Q8_0 to Q3_K_M the KL grows 9 times
+(0.008 → 0.074) and "same top token" falls from 97% to 89%, while perplexity does not move at all (8.56 → 8.52; Q4_K_M
+and IQ4_XS are even a hair <em>below</em> BF16, which is noise). Perplexity only looks at the probability of the right
+token; KL compares the whole distribution and catches the 11% of positions where the quantized model's favourite word
+changed. Perplexity only starts to rise at IQ3_XXS (+10%), where the KL passes 0.1.</li>
+<li><strong>Benchmarks follow KL, not perplexity, and they have a knee.</strong> Down to Q3_K_M (3.9 bits) every score is
+within noise of Q5_K_M. At IQ3_XXS (3.2 bits) MMLU drops 4–5 points. At 2.8 bits HumanEval loses 10 points, and at 2.3
+bits everything collapses: GSM8K 82%, and 134 of 164 HumanEval answers ran into the token limit, the model looping
+instead of finishing. Knowledge (MMLU) and code go first; grade-school math holds out longest, the same order as with
+pruning.</li>
+<li><strong>Speed has a cliff, not a slope.</strong> Every file that fits in VRAM generates at 186–212 tokens per second,
+whatever its size. Q6_K (14.2 GiB) does not fit with its context and drops to 108, Q8_0 to 54, BF16 to 20: llama.cpp's
+<code>--fit</code> puts the expert tensors that do not fit in system RAM, and those are read over PCIe for every token.
+Below the fit, smaller files are barely faster, because a MoE only reads its ~3 B active weights per token. Prompt
+processing shows the same cliff: ~5,000–5,700 tokens per second on the GPU, 2,770 / 980 / 270 for Q6_K / Q8_0 / BF16.</li>
+<li><strong>Do not over-read 1–2 points.</strong> This run's Q4_K_M scored 78.7 on HumanEval; the same file in step 2
+scored 79.9. Greedy decoding is deterministic only for one request at a time: with four parallel requests
+(<code>-np 4</code>) the GPU batches them differently from run to run, rounding changes, and a few long answers go another
+way. That is why IQ4_XS "beats" Q4_K_M on HumanEval here (82.3 against 78.7): within noise.</li>
+<li><strong>Even Q8_0 is not quite lossless here.</strong> Its KL of 0.008 is about 6 times the 0.0014 in llama.cpp's
+own table for a dense Llama 8 B at Q8_0. A plausible cause is the router: a tiny change in a score can swap which of two
+close experts is chosen, and then the whole expert output changes, not just a rounding error. Behaviour does not notice
+(perplexity identical), but it is a reason MoE models are compared on KL rather than assumed safe.</li>
+</ul>
+
+<h3 id="quant-choose">Choosing a file for your GPU</h3>
+<ol>
+<li><strong>Leave room for the context.</strong> The file is not the whole memory bill: the KV cache, compute buffers and
+the desktop take 2–4 GB. On this 16 GB card every file up to 12.4 GiB ran at full speed and the 14.2 GiB one did not, so
+the practical budget is about <em>VRAM − 2.5 to 3.5 GiB</em>.</li>
+<li><strong>Take the biggest model that fits at 3 bits or more.</strong> Q4_K_M or IQ4_XS is the safe default; down to
+about 3 bits (Q3_K_M, UD-IQ3_XXS) the losses were within noise here. Going to 2 bits is worth it only to fit a much
+bigger model, as the 35 B at UD-IQ2_M shows.</li>
+<li><strong>Do not pay for more than ~5 bits.</strong> Q5_K_M, Q6_K and Q8_0 bought nothing measurable on the benchmarks
+and cost speed as soon as they stopped fitting.</li>
+<li><strong>Prefer i-quants with an importance matrix below 4 bits.</strong> IQ4_XS was 11% smaller than Q4_K_M at the
+same quality. Below 4 bits the K-quants have no small types left, and the IQ2/IQ3 types are designed around the imatrix.</li>
+<li><strong>Prune only when quantization is not enough.</strong> For this 16 GB GPU the best file measured is the
+<em>unpruned</em> 35 B at UD-IQ3_XXS: 12.2 GiB, 173 tokens per second, average 92.2 against the original's 92.9. Pruning
+starts to make sense when even 2-bit quantization of the full model does not fit (an 8 GB card here), or with a specialist
+calibration, as in run 3.</li>
+</ol>
+<p>On this machine: <code>llama.cpp/build/bin/llama-server -m gguf/original-unsloth/Qwen3.5-35B-A3B-UD-IQ3_XXS.gguf --fit on</code>
+after <code>scripts/download_baseline.sh Qwen3.5-35B-A3B-UD-IQ3_XXS.gguf</code>.</p>
+
+<h2 id="step-5-ablation-merging">Step 5: does an expert matter? Ablation, and merging instead of deleting</h2>
+<p><a href="i-ablation.html">▶ Animated appendix I: deleting one expert, the token damage, and why two experts cannot simply be averaged</a></p>
+<p>Two questions were left open by the earlier steps. <a href="#experts-caveats">Inside the experts</a> warned that "this
+expert receives biology words" is correlation, not proof that the model <em>needs</em> it for biology. And every prune so
+far threw the dropped experts away; the published alternative is to <em>merge</em> each one into a survivor, so that some
+of what it knew is kept. The REAP paper (Lasby et al., 2025) claims pruning beats merging for generative tasks. Step 5
+tests both, with the streamed evaluation tools already built. It needs the original model, so the teacher was downloaded
+again (<code>01_download.sh</code>, 7 minutes).</p>
+
+<h3 id="ablate-method">Causal ablation: delete one expert, measure where it hurts</h3>
+<p><strong>Ablation</strong> means removing one part and measuring what breaks: the standard way to turn "this part is
+active when X happens" into "this part is needed for X". Here the part is a single expert, removed exactly as pruning
+would (its router row and weights; its tokens re-route to their next choice), in a model that keeps the other 10,239.</p>
+<ul>
+<li><strong>Text by topic.</strong> <code>02_calib_data.py --preset domains</code> builds <code>data/domains.pt</code>:
+16 x 1024 tokens each of biology, chemistry and physics (camel-ai question-answer pairs, one writing style for all three),
+algebra, geometry and number theory (MATH competition problems with worked solutions), Python code, and web text. Pairs in
+one style are the point: if deleting the "biology expert" hurts biology but not chemistry written the same way, the
+difference is the topic.</li>
+<li><strong>Which experts.</strong> The seven from <a href="#experts-found">the table in Inside the experts</a> (algebra,
+code comments, biology, economics, people, think/LaTeX, the generalist), and 9 <em>random</em> experts from the same layers
+as controls: what deleting any one expert costs.</li>
+<li><strong>Per token, not just per text.</strong> The loss of every one of the 131k tokens is saved before and after.
+That allows a sharper question than "did biology get worse": did the tokens <em>this expert actually handled</em> (one of
+their 8 picks in the unablated model) get worse, compared with the tokens it never saw?</li>
+<li><strong>Cheap.</strong> The unablated hidden states at the input of layers 5, 20, 35 and 36 are kept in RAM, so a test
+of layer L recomputes only layers L to 39: 9–60 seconds each, 12 minutes for all 16.</li>
+</ul>
+
+<h3 id="ablate-determinism">First, make the measurement exact</h3>
+<p>The first attempt measured the unablated model twice, as a control, and got two different answers: per domain the
+perplexity moved by up to 0.15% with nothing changed. Deleting one expert moved it by less than that, so the experiment
+could not see anything.</p>
+<p>The cause was one line of <code>moe_forward</code>. Each token's 8 expert outputs were added into the result with
+<code>index_add_</code>, which on a GPU uses <em>atomic</em> additions: thousands of threads add into the same memory in
+whatever order they happen to finish. Floating-point addition is not associative (in bf16, (a + b) + c can differ from
+a + (b + c) in the last bit), so the order changes the rounding, and 40 layers amplify the difference. The fix writes each
+of a token's 8 results into its own slot and sums the slots in a fixed order:</p>
+<pre><code class="language-python">contrib = torch.empty_like(ys)
+contrib[order] = ys * weight[:, None]            # each (token, slot) result goes back to its place
+out = contrib.view(-1, top_k, hidden).sum(dim=1)  # fixed order: bit-identical on every run</code></pre>
+<p>After the fix, the repeat run matched to every bit: <strong>0.0000%</strong> on every domain. Every difference below is
+now caused by the deletion and nothing else. (As a side effect the sum is now done at higher precision, so earlier
+perplexities move slightly: original 4.915 → 4.913, K=128 5.916 → 5.919, K=48 11.72 → 11.68. Step 5 re-measures its
+references with the new code.) The lesson is general: before
+measuring a small effect, measure your measurement, by running the same thing twice.</p>
+
+<h3 id="ablate-results">What deleting one expert does</h3>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>layer · expert</th><th>appendix G reading</th><th>its biggest share of a domain's tokens</th><th>perplexity change there</th><th>biggest change anywhere</th><th>loss change on the tokens it handled (millinats)</th></tr></thead>
+<tbody>
+<tr><td>5 · 39</td><td>algebra</td><td>chemistry 3.9%</td><td>+0.01%</td><td>web +0.09%</td><td>+0.7</td></tr>
+<tr><td>5 · 50</td><td>code comments</td><td>code 8.1%</td><td>-0.05%</td><td>geometry +0.05%</td><td>-0.4</td></tr>
+<tr><td>20 · 241</td><td>biology and medicine</td><td>chemistry 33.8%</td><td>+0.13%</td><td>chemistry +0.13%</td><td>+2.6</td></tr>
+<tr><td>20 · 97</td><td>economics and environment</td><td>physics 1.4%</td><td>-0.01%</td><td>algebra -0.06%</td><td>-2.0</td></tr>
+<tr><td>20 · 109</td><td>people and relationships</td><td>web 0.6%</td><td>+0.03%</td><td>algebra -0.08%</td><td>-1.1</td></tr>
+<tr><td>35 · 204</td><td>think tags and LaTeX</td><td>algebra 3.4%</td><td>-0.01%</td><td>web +0.05%</td><td>-0.4</td></tr>
+<tr><td>36 · 173</td><td>generalist, no speciality</td><td>web 0.1%</td><td>+0.04%</td><td>web +0.04%</td><td>+10.7</td></tr>
+<tr><td>5 · 172</td><td>random control</td><td>code 3.7%</td><td>+0.03%</td><td>web +0.10%</td><td>+0.6</td></tr>
+<tr><td>5 · 55</td><td>random control</td><td>geometry 32.1%</td><td>-0.39%</td><td>algebra +0.64%</td><td>+9.4</td></tr>
+<tr><td>5 · 225</td><td>random control</td><td>web 12.9%</td><td>+0.02%</td><td>geometry +0.37%</td><td>-0.1</td></tr>
+<tr><td>20 · 31</td><td>random control</td><td>physics 4.9%</td><td>+0.02%</td><td>algebra -0.06%</td><td>-0.8</td></tr>
+<tr><td>20 · 218</td><td>random control</td><td>web 3.5%</td><td>+0.02%</td><td>number theory +0.04%</td><td>+1.7</td></tr>
+<tr><td>20 · 17</td><td>random control</td><td>code 9.0%</td><td>-0.03%</td><td>number theory -0.07%</td><td>-0.6</td></tr>
+<tr><td>35 · 53</td><td>random control</td><td>code 32.2%</td><td>+0.12%</td><td>code +0.12%</td><td>+4.1</td></tr>
+<tr><td>35 · 227</td><td>random control</td><td>geometry 47.4%</td><td>+0.98%</td><td>geometry +0.98%</td><td>+11.1</td></tr>
+<tr><td>35 · 62</td><td>random control</td><td>physics 2.9%</td><td>+0.00%</td><td>web +0.06%</td><td>-0.5</td></tr>
+</tbody></table></div>
+<p>"Share" is the fraction of the domain's tokens for which the expert was one of the 8 picks in that layer. Perplexity
+changes are over 16k tokens per domain; a millinat is a thousandth of a nat of loss per token, and +10 millinats is about
+1% perplexity on those tokens.</p>
+<ul>
+<li><strong>The named specialists barely matter, one at a time.</strong> Not one changes any domain by more than 0.13%,
+and most change nothing beyond ±0.1%, the same as random experts. The "algebra expert" 5·39 is picked for only
+<strong>0.8%</strong> of algebra tokens. Lift found it because it reacts to rare words ("quadratic", "substitution"), but
+rare words are rare: almost all algebra goes through other experts, and the few tokens it did handle re-route to
+neighbours that do the job almost as well.</li>
+<li><strong>Damage follows share.</strong> Across all 128 (expert, domain) pairs: experts that handled under 10% of a
+domain's tokens changed its perplexity by 0.00% on average; the four that handled 25% or more, by +0.21% on
+average (from −0.39% to +0.98%). And within a text, the damage lands on the expert's own tokens: their loss rose by up to 11 millinats, while the
+tokens it never handled moved by less than 0.6.</li>
+<li><strong>The clearest causal specialist was found by a random control.</strong> Expert 35·227 was drawn as a random
+control. It handles 47% of geometry tokens in layer 35, and appendix G lists its top tokens as "ilateral", "AB",
+"triangle", "angles", "perpendicular". Deleting it made <em>every one</em> of the 16 geometry sequences worse (+0.98% in
+total), algebra +0.08% and everything else ±0.03%. That is a geometry expert, by correlation and by cause.</li>
+<li><strong>Labels can mislead.</strong> The "biology expert" 20·241 handles 7% of biology tokens but 34% of chemistry
+tokens, and deleting it hurt chemistry (+0.13%), not biology. Its words in appendix G ("membrane", "drug", "sensors")
+came from web text; on this data it is a chemistry expert. And deleting 5·55 made geometry 0.39% <em>better</em> while
+algebra got 0.64% worse, nearly all of it from one sequence of Asymptote plotting code: a single test on a little text
+can be dominated by one document.</li>
+</ul>
+<h3 id="ablate-teams">Deleting a team: specialisation is real</h3>
+<p>One expert out of 256 is a small part of any token's computation, with plenty of neighbours to fall back on. The team test
+(<code>16_ablate.py --teams 4 16</code>) deletes, in <em>every</em> layer, the experts that are both specific to a domain
+(picked at least 2x more often on it than on average) and carry the most of its traffic: 4 per layer (160 experts, 1.6% of
+all) or 16 per layer (640, 6%). The teams are chosen on the first 8 sequences of each domain and measured on the other 8,
+so the choice is not fitted to the text it is judged on. Two random teams of each size are the control.</p>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>team for</th><th>share of the domain's picks it carries (x4)</th><th>own domain, 4 per layer</th><th>worst other domain</th><th>own domain, 16 per layer</th><th>worst other domain</th></tr></thead>
+<tbody>
+<tr><td>biology</td><td>15%</td><td><strong>+31%</strong></td><td>chemistry +4.0%</td><td><strong>+105%</strong></td><td>chemistry +16.0%</td></tr>
+<tr><td>chemistry</td><td>10%</td><td><strong>+25%</strong></td><td>physics +2.5%</td><td><strong>+42%</strong></td><td>physics +6.4%</td></tr>
+<tr><td>physics</td><td>15%</td><td><strong>+51%</strong></td><td>chemistry +4.6%</td><td><strong>+87%</strong></td><td>chemistry +18.9%</td></tr>
+<tr><td>algebra</td><td>11%</td><td><strong>+29%</strong></td><td>geometry +18.3%</td><td><strong>+67%</strong></td><td>geometry +35.8%</td></tr>
+<tr><td>geometry</td><td>16%</td><td><strong>+47%</strong></td><td>algebra +14.7%</td><td><strong>+103%</strong></td><td>algebra +32.6%</td></tr>
+<tr><td>number theory</td><td>15%</td><td><strong>+34%</strong></td><td>algebra +23.0%</td><td><strong>+72%</strong></td><td>algebra +53.7%</td></tr>
+<tr><td>code</td><td>12%</td><td><strong>+31%</strong></td><td>geometry +2.9%</td><td><strong>+145%</strong></td><td>geometry +9.4%</td></tr>
+<tr><td>web</td><td>10%</td><td><strong>+2%</strong></td><td>biology +8.9%</td><td><strong>+13%</strong></td><td>biology +23.3%</td></tr>
+<tr><td><em>random team #1</em></td><td>1.6%</td><td>–</td><td>geometry +0.8% (max)</td><td>–</td><td>geometry +5.6% (max)</td></tr>
+<tr><td><em>random team #2</em></td><td>1.6%</td><td>–</td><td>algebra +1.2% (max)</td><td>–</td><td>algebra +4.5% (max)</td></tr>
+</tbody></table></div>
+<ul>
+<li><strong>Every topic team hurts its own topic by 25–51% (x4) and unrelated topics by at most a few percent; random
+teams of the same size cost under 1.2% anywhere.</strong> 1.6% of the experts carry a large part of a topic, and the model cannot route
+around their loss the way it routes around one expert. With 16 per layer the seven topic teams cost their own domain +42% to +145%.
+With 4 per layer, code stays within 0.3% when the biology, chemistry or physics team is deleted.</li>
+<li><strong>Related topics share experts.</strong> The algebra, geometry and number-theory teams each hurt the other two
+by 8–23%; the three sciences overlap less (1–5%). The off-diagonal pattern is a map of which skills share machinery.</li>
+<li><strong>"Web" is not a topic.</strong> The web team hurt web text by only 1.6% but biology by 8.9%: web text covers
+everything, so its "most specific" experts were whatever the 8 selection documents happened to be about (the first is
+an article on muscle pain). A domain has to be a topic for a team to exist.</li>
+<li><strong>What this means for pruning.</strong> Run 3's code specialist is the same experiment in reverse: keep the
+code team and the experts it needs, delete the rest. It also explains why the general prune lost knowledge and code
+(MMLU −13, HumanEval −16) while keeping fluency: those abilities sit in teams of rarely used experts, and a uniform
+budget of 128 per layer cuts into many teams at once.</li>
+</ul>
+<pre class="cmd"><code class="language-bash">.venv/bin/python -I scripts/02_calib_data.py --preset domains        # data/domains.pt, 2 min
+.venv/bin/python -I scripts/16_ablate.py                             # 16 single experts, 12 min
+.venv/bin/python -I scripts/16_ablate.py --no-single --teams 4 16    # 20 team deletions, 24 min
+</code></pre>
+
+
+<h3 id="merge-method">Merging instead of deleting</h3>
+<p>Pruning throws 128 experts per layer away. Merging tries to keep some of what they knew: each dropped expert is folded
+into a surviving expert that does a similar job, so the file has the same 128 experts per layer as the prune, but each
+survivor carries a little of its dropped neighbours. Three decisions define a merge:</p>
+<ol>
+<li><strong>Which survivor.</strong> <code>17_expert_similarity.py</code> streams 32 calibration sequences through the
+original model, takes 1,024 MoE inputs per layer, runs <em>all</em> 256 experts on them and compares their outputs
+(cosine similarity of the 1,024 x 2048 output values): two experts are alike if they answer the same inputs the same
+way. The cheaper alternative, the cosine of the two router rows ("would the router pick them for the same tokens?"), is
+saved too (<code>--sim-kind router</code>). Each dropped expert goes to its most similar survivor. Which experts survive is
+the same REAP choice as the prune, so the comparison is fair.</li>
+<li><strong>How to average.</strong> The merged weights are the usage-weighted mean of the group: an expert picked
+twice as often counts twice as much.</li>
+<li><strong>Line up the neurons first.</strong> This is the subtle part. An expert computes
+<code>down · (silu(gate · x) ⊙ (up · x))</code> with 512 hidden neurons; neuron j owns row j of gate and up and column j of
+down. Two changes leave the function exactly the same: listing the neurons in another order, and negating a neuron's up
+row and down column together (silu(g)·(−u)·(−w) = silu(g)·u·w). Two separately trained experts have no reason to agree on
+either, so averaging "neuron 1 with neuron 1" mixes unrelated neurons. <code>align_neurons</code> in
+<code>moe_stream.py</code> matches each neuron of the dropped expert to one of the survivor's (the Hungarian algorithm,
+<code>scipy.optimize.linear_sum_assignment</code>, on the cosine similarity of their gate, up and down vectors, trying both
+signs), then averages. A unit test with real expert shapes: averaging an expert with a shuffled, sign-flipped copy of
+itself, the same function, gives an <strong>82%</strong> output error naively and <strong>0%</strong> aligned; with a copy
+that also has 50% noise added, 84% against 45%.</li>
+</ol>
+<p>One more choice is hidden in the router. In the merged file the dropped expert's router row is gone (the file has 128
+rows, like the prune), so tokens that used to pick it re-route, and only some land on the merged expert that now holds
+its weights. The published merge methods (M-SMoE, HC-SMoE) instead keep the full router and send every token that picks
+a dropped expert to the merged expert of its group. That cannot be stored in a standard 128-expert checkpoint, but it can
+be evaluated (<code>--merge aligned-remap</code>), and it is the fairest test of "does averaging keep the knowledge?".</p>
+<pre class="cmd"><code class="language-bash">.venv/bin/python -I scripts/17_expert_similarity.py                                   # 1 min
+.venv/bin/python -I scripts/05_eval.py --stats stats/calib.pt --keep 128 --merge naive   # ~1.5 min
+.venv/bin/python -I scripts/05_eval.py --stats stats/calib.pt --keep 128 --merge aligned # ~6 min (Hungarian, 5,120 pairs)
+.venv/bin/python -I scripts/05_eval.py --stats stats/calib.pt --keep 128 --merge aligned --sim-kind router
+.venv/bin/python -I scripts/05_eval.py --stats stats/calib.pt --keep 128 --merge aligned-remap
+.venv/bin/python -I scripts/04_prune.py --keep 128 --merge aligned --out models/q35-merge-k128   # a merged checkpoint
+#   (same merge code as the evals, but not run here: 36 GiB, and the merges lost on perplexity already)
+</code></pre>
+
+<h3 id="merge-results">Delete or merge? The results</h3>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>held-out perplexity (original: all 4.91, chat 4.03, wikitext 6.84)</th><th>K=128: all</th><th>chat</th><th>wikitext</th><th>K=48: all</th><th>chat</th><th>wikitext</th></tr></thead>
+<tbody>
+<tr><td>delete (REAP prune, as in runs 1 and 2)</td><td>5.92</td><td>4.46</td><td>9.96</td><td>11.68</td><td>8.31</td><td>25.64</td></tr>
+<tr><td>merge, plain weighted average</td><td>7.89</td><td>5.20</td><td>15.26</td><td>38.75</td><td>31.82</td><td>71.59</td></tr>
+<tr><td>merge, neurons aligned first</td><td>7.51</td><td>4.99</td><td>14.31</td><td>33.13</td><td>26.86</td><td>63.16</td></tr>
+<tr><td>… partners chosen by router similarity</td><td>7.31</td><td>4.97</td><td>14.04</td><td>27.27</td><td>21.07</td><td>55.75</td></tr>
+<tr><td>… keeping the full router (M-SMoE style)</td><td>7.67</td><td>5.09</td><td>14.66</td><td>37.91</td><td>30.94</td><td>71.54</td></tr>
+</tbody></table></div>
+<p>Every way of merging lost to plain deletion, at both sizes, and the gap grows with the number of experts merged: +24%
+to +33% perplexity at 128 experts, 2.3–3.3x at 48. The REAP paper's claim holds here, and already on perplexity, before
+any generative benchmark: with merges this far behind, generating with them could only be worse, so none was built.
+Why:</p>
+<ul>
+<li><strong>The experts are nearly unrelated.</strong> Run on the same 1,024 tokens, a typical expert's most similar
+neighbour in its layer has an output cosine of 0.01–0.04 in layers 1–38 (layer 0: 0.05, layer 39: 0.14), and even the most
+similar pair of a layer is typically about 0.07. Averaging two such functions gives something close to neither.</li>
+<li><strong>Nearest neighbours make hubs.</strong> When everything is about equally far away, "most similar survivor"
+is decided by tiny differences, and a few survivors attract many dropped experts: the largest group at K=128 holds 37
+experts, at K=48 58. The usage-weighted average then leaves the median survivor with only 53% of its own weights (K=128)
+or 30% (K=48): merging damages the experts that were kept.</li>
+<li><strong>Alignment helps, but only with the bookkeeping.</strong> Lining up the neurons took the K=128 merge from
+7.89 to 7.51 and the K=48 one from 38.7 to 33.1: it removes the scrambling of neuron order, not the difference in what
+the experts compute. Choosing partners by router similarity was the best merge (7.31 and 27.3), plausibly because it
+groups experts the router treats as interchangeable.</li>
+<li><strong>Keeping the full router made it worse</strong> (7.67 against 7.51; 37.9 against 33.1). Tokens that wanted a
+dropped expert are now sent to its group's average, which serves neither expert's tokens well; deleted, they would
+re-route to another intact expert that does their job almost as well. That is the REAP paper's argument ("functional
+subspace collapse": a router mixing two experts per input is replaced by one fixed average), measured.</li>
+</ul>
+<p>Merging should do better in models whose experts <em>are</em> similar (for example experts copied from one dense
+network and then trained, or after training that pulls a group together); experts as unrelated as these, measured
+above, are the hard case. All of step 5 runs in about 70 minutes
+(<code>scripts/run_step5.sh</code>, logs in <code>logs/step5*.log</code>, table: <code>scripts/ablation_report.py</code>).</p>
+
+<h2 id="step-6-practical">Step 6: from Hugging Face to your GPU, a practical guide</h2>
+<p><a href="j-practical.html">▶ Animated appendix J: the whole journey, the memory split of a model bigger than the GPU, and a command builder</a></p>
+<p>The earlier steps used these tools for one model. This step is the reusable version: how to get any model from
+Hugging Face, turn it into GGUF files of the sizes you want, check them, run them well on a 16 GB GPU (including a model
+that does <em>not</em> fit), and publish the result. Every command was run here, except the final upload, which publishes
+under your account and is left for you.</p>
+
+<h3 id="hf-basics">1. Hugging Face: what is in a model repo, and how to download it</h3>
+<p>A model on Hugging Face is a git repository. The real listing of <code>Qwen/Qwen3.5-2B</code>:</p>
+<pre><code>config.json                          2.9 KB  architecture: layers, sizes, layer types, vocabulary size
+model.safetensors-00001-of-00001…    4.5 GB  the weights (bigger models: many shards + an index file)
+model.safetensors.index.json          64 KB  which tensor is in which shard
+tokenizer.json, vocab.json, merges.txt  23 MB  the tokenizer (concept 1)
+tokenizer_config.json, chat_template.jinja     special tokens and the chat template (concept 16)
+preprocessor_config.json, video_preprocessor…  image and video input settings (this model also sees images)
+README.md, LICENSE                             the model card and the licence (Apache 2.0 here)</code></pre>
+<p>The commands (the <code>hf</code> tool comes with <code>huggingface_hub</code>, installed by <code>00_setup.sh</code>):</p>
+<pre class="cmd"><code class="language-bash">hf models info Qwen/Qwen3.5-2B                        # metadata as JSON: parameters, tags, files, licence
+hf download Qwen/Qwen3.5-2B --local-dir models/Qwen3.5-2B   # a whole repo into a folder of your choice
+hf download unsloth/Qwen3.5-35B-A3B-GGUF Qwen3.5-35B-A3B-Q4_K_M.gguf --local-dir gguf/x   # one file
+hf download unsloth/Qwen3.5-35B-A3B-GGUF --include "*IQ4_XS*" --local-dir gguf/x          # files by pattern
+hf auth login                                         # a token: needed for gated models, uploads, higher limits
+hf cache ls                                           # what the default cache (~/.cache/huggingface) holds
+hf cache rm model/Qwen/Qwen3.5-2B --dry-run           # what deleting it would free (drop --dry-run to delete)
+</code></pre>
+<ul>
+<li><strong>Cache or folder.</strong> Without <code>--local-dir</code>, files go to the shared cache in
+<code>~/.cache/huggingface/hub</code> and every program finds them by repo name; with it, you get a plain folder, which is
+easier to see, move and delete. This project always uses folders.</li>
+<li><strong>Look before you download.</strong> A GGUF repo holds a dozen sizes of the same model; download only the file
+you need. <code>hf models info</code> lists the files; the repo's web page shows their sizes.</li>
+<li><strong>Gated models</strong> (some Llama and Gemma releases) need you to accept a licence on the web page and a token
+(<code>hf auth login</code>, or the <code>HF_TOKEN</code> environment variable). Without a token, downloads still work for
+open models but are rate-limited (the warning "You are sending unauthenticated requests" in our logs).</li>
+<li><strong>Speed.</strong> The 67 GiB teacher took 7 minutes and the 20.5 GiB GGUF about 3 minutes (Hugging Face's Xet
+storage downloads chunks in parallel).</li>
+</ul>
+
+<h3 id="gguf-make">2. Any model to GGUF, checked: <code>scripts/make_gguf.sh</code></h3>
+<p>The general recipe behind <code>07_gguf.sh</code>, in one script that works for any model llama.cpp supports:</p>
+<pre class="cmd"><code class="language-bash">scripts/make_gguf.sh Qwen/Qwen3.5-2B Q8_0 Q4_K_M IQ4_XS IQ3_XXS
+</code></pre>
+<ol>
+<li><code>hf download</code> the safetensors.</li>
+<li><code>convert_hf_to_gguf.py --outtype bf16</code>: one file with weights, tokenizer, chat template and architecture
+settings. For a model that also sees images, a second run with <code>--mmproj</code> writes the vision encoder to its own
+file (<code>mmproj-Qwen3.5-2B-F16.gguf</code>, 0.6 GiB), which llama-server loads with <code>--mmproj</code>.</li>
+<li><code>llama-imatrix</code> on 200 x 512 tokens of wikitext-2 (generic English text; for a specialist, use text like
+the intended use, as run 3 did).</li>
+<li><code>llama-quantize --imatrix</code> to each type.</li>
+<li><code>llama-perplexity</code> on wikitext-2 test for the BF16 file and every quantization: the smoke test that the
+conversion is right (a broken conversion gives perplexities in the hundreds or thousands) and a measure of what each type
+costs.</li>
+</ol>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>Qwen3.5-2B</th><th>file</th><th>perplexity (wikitext-2 test)</th><th>change</th></tr></thead>
+<tbody>
+<tr><td>BF16</td><td>3.63 GiB</td><td>10.639</td><td>+0.0%</td></tr>
+<tr><td>Q8_0</td><td>1.93 GiB</td><td>10.648</td><td>+0.1%</td></tr>
+<tr><td>Q4_K_M</td><td>1.22 GiB</td><td>11.038</td><td>+3.7%</td></tr>
+<tr><td>IQ4_XS</td><td>1.14 GiB</td><td>11.214</td><td>+5.4%</td></tr>
+<tr><td>IQ3_XXS</td><td>0.92 GiB</td><td>12.482</td><td>+17.3%</td></tr>
+</tbody></table></div>
+<p>The whole run (download, convert, imatrix, four quantizations) took 3 minutes 54 seconds, plus a minute of perplexity
+checks. Note the difference from step 4: there, the 19 B MoE lost nothing measurable at Q4_K_M and little at Q3_K_M;
+here, the 2 B loses 3.7% at Q4_K_M and 17% at IQ3_XXS. A small model has fewer redundant weights to absorb rounding, so
+small models deserve more bits: Q8_0 (free here) or at least Q5/Q6.</p>
+<p><strong>A problem worth knowing about: the MTP head.</strong> The first run failed at IQ3_XXS with "Missing importance
+matrix for tensor blk.24.attn_k.weight". The 2B model has 24 layers (0–23); block 24 is its <em>multi-token
+prediction</em> head, an extra layer used only for speculative decoding (llama-server
+<code>--spec-type draft-mtp</code>). A normal forward pass never runs it, so the importance matrix has no data for it, and
+llama.cpp refuses to make the very low-bit types (IQ1–IQ3) without that data. The script now stores that one block at
+Q8_0 (<code>--tensor-type "blk\.24\.=q8_0"</code>, the block number read from <code>config.json</code>). The pruned 19 B
+did not have this problem because <code>04_prune.py</code> drops the MTP head. A second lesson from the same failure: a
+crashed <code>llama-quantize</code> leaves a half-written file that looks fine until something loads it ("invalid magic
+characters"); the script now writes to a <code>.part</code> file and renames it only on success.</p>
+<p><strong>Look inside a GGUF</strong> with <code>.venv/bin/gguf-dump --no-tensors FILE.gguf</code>: architecture
+(<code>qwen35</code>), <code>block_count = 25</code> (24 layers + the MTP block), <code>context_length = 262144</code>,
+<code>full_attention_interval = 4</code>, licence, base model, the chat template, and the file type.</p>
+
+<h3 id="run-well">3. Running it well</h3>
+<p><code>llama-server</code> serves a model over HTTP with a web chat page and an OpenAI-compatible API. The options that
+matter most:</p>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>option</th><th>what it does</th><th>advice</th></tr></thead>
+<tbody>
+<tr><td><code>-m FILE</code></td><td>the GGUF to load</td><td>for split files, give the first part</td></tr>
+<tr><td><code>--fit on</code> (default)</td><td>llama.cpp decides how much goes on the GPU and how big the context can be</td><td>a good start; set things yourself when you need control</td></tr>
+<tr><td><code>-ngl 99</code></td><td>all layers on the GPU</td><td>when the file fits with room for context (concept 13)</td></tr>
+<tr><td><code>--n-cpu-moe N</code></td><td>keep the experts of the first N layers in system RAM</td><td>the way to run a MoE bigger than VRAM (below)</td></tr>
+<tr><td><code>-c N</code></td><td>context length (shared by all slots)</td><td>20 KiB per token for this model's f16 cache</td></tr>
+<tr><td><code>-ctk q8_0 -ctv q8_0</code></td><td>8-bit KV cache</td><td>halves the cache; made 262k tokens fit (concept 13)</td></tr>
+<tr><td><code>-np N</code></td><td>N requests in parallel</td><td>more total throughput, less per request (concept 15)</td></tr>
+<tr><td><code>--reasoning off</code> / <code>--reasoning-budget N</code></td><td>thinking off, or capped at N tokens</td><td>per request: <code>"chat_template_kwargs": {"enable_thinking": false}</code></td></tr>
+<tr><td><code>--temp --top-p --top-k --presence-penalty</code></td><td>default sampling</td><td>Qwen thinking mode: 1.0 / 0.95 / 20 / 1.5 (concept 16)</td></tr>
+<tr><td><code>--mmproj FILE</code></td><td>the vision encoder</td><td>for image input</td></tr>
+<tr><td><code>--host 0.0.0.0 --api-key KEY</code></td><td>listen on the network, require a key</td><td>default is localhost only; never expose it without a key</td></tr>
+</tbody></table></div>
+<pre class="cmd"><code class="language-bash">llama.cpp/build/bin/llama-server -m gguf/q35-reap-k128/q35-reap-k128-Q4_K_M.gguf -ngl 99 -c 32768 \
+    --temp 1.0 --top-p 0.95 --top-k 20 --presence-penalty 1.5 --port 8080
+# open http://localhost:8080 for the chat page, or use the API from any OpenAI client:
+curl http://localhost:8080/v1/chat/completions -H "Content-Type: application/json" -d '{
+  "messages": [{"role": "user", "content": "What is the capital of Australia?"}],
+  "chat_template_kwargs": {"enable_thinking": false}}'
+</code></pre>
+<p><strong>A MoE bigger than the GPU.</strong> The unpruned 35 B at Q4_K_M is 20.5 GiB, more than the card's 16. Since a
+token only uses 8 of 256 experts per layer, the expert tensors can stay in system RAM and be computed there, while
+attention, DeltaNet, the routers and the shared experts (small, and used by every token) stay on the GPU.
+<code>--n-cpu-moe N</code> moves the experts of the first N layers to the CPU. Measured with
+<code>scripts/offload_sweep.sh</code> (the file on the F: drive, read into RAM at load):</p>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>35 B Q4_K_M, 20.5 GiB</th><th>weights on the GPU</th><th>generation, tokens/s</th><th>prompt, tokens/s</th></tr></thead>
+<tbody>
+<tr><td>--fit on (llama.cpp chooses)</td><td>13.0 GiB</td><td>66</td><td>1,510</td></tr>
+<tr><td>--n-cpu-moe 12</td><td>14.6 GiB</td><td>78</td><td>2,078</td></tr>
+<tr><td>--n-cpu-moe 16</td><td>12.7 GiB</td><td>66</td><td>1,736</td></tr>
+<tr><td>--n-cpu-moe 20</td><td>10.9 GiB</td><td>54</td><td>1,351</td></tr>
+<tr><td>--n-cpu-moe 24</td><td>9.1 GiB</td><td>46</td><td>1,132</td></tr>
+<tr><td>--n-cpu-moe 30</td><td>6.4 GiB</td><td>43</td><td>999</td></tr>
+<tr><td>--cpu-moe (all 40 layers)</td><td>1.9 GiB</td><td>33</td><td>734</td></tr>
+<tr><td><em>for comparison: 35 B UD-IQ3_XXS (12.2 GiB), all on the GPU</em></td><td>12.2 GiB</td><td>173</td><td>4,180</td></tr>
+<tr><td><em>for comparison: 19 B pruned Q4_K_M, all on the GPU</em></td><td>10.3 GiB</td><td>212</td><td>5,527</td></tr>
+</tbody></table></div>
+<ul>
+<li><strong>It works, and degrades gracefully.</strong> With 12 layers' experts in RAM the 35 B runs at 78 tokens per second;
+with all of them in RAM, still 33, using under 3 GB of VRAM: a MoE token touches only 8 of 256 experts per layer, so the
+CPU's share of the work is small. An 8 GB GPU with 32 GB of RAM could run this 35 B model.</li>
+<li><strong>Keep as much on the GPU as fits.</strong> Each layer's experts moved to RAM costs speed; <code>--fit on</code>
+was cautious (13.0 GiB on the GPU, 66 tokens per second) where 14.6 GiB still fitted at a short context (78). Leave room
+for the context you need (concept 13).</li>
+<li><strong>But fit beats offload.</strong> The same model at UD-IQ3_XXS fits completely and ran at 173 tokens per second
+with almost the same benchmark average (92.2 against 92.9). On this card the 3-bit file is the better choice; offloading
+is for when no file that fits is good enough, or for a smaller GPU.</li>
+<li><strong>Prompt processing suffers too</strong> (2,078 down to 734 tokens per second), since every expert's weights
+must cross PCIe for every batch.</li>
+</ul>
+<p>Other front-ends run the same GGUF files: <strong>LM Studio</strong> (a desktop app; it lists GGUF files from its
+models folder and from Hugging Face) and <strong>Ollama</strong> (<code>ollama create mymodel -f Modelfile</code> with a
+Modelfile whose first line is <code>FROM ./file.gguf</code>). Both use llama.cpp inside; neither was installed here, so
+these two are untested.</p>
+
+<h3 id="upload">4. Publishing on Hugging Face</h3>
+<ol>
+<li><strong>A token with write access</strong>: create one at huggingface.co → Settings → Access Tokens, then
+<code>hf auth login</code>.</li>
+<li><strong>A model card</strong>: <code>scripts/model_card.py --dir gguf/q35-reap-k128</code> writes
+<code>README.md</code> next to the files. Its YAML header is read by the Hub: <code>license</code> (a derivative keeps the
+original's: Apache 2.0 here), <code>base_model</code> (links your repo into the original's model tree), <code>tags</code>
+and <code>library_name: gguf</code>. The text says what it is, how it was made, its measured quality (including what got
+worse) and how to run it. Read and edit it before publishing.</li>
+<li><strong>Upload</strong>: <code>scripts/upload_gguf.sh YOUR_NAME/Qwen3.5-19B-A3B-REAP-GGUF gguf/q35-reap-k128</code>
+creates the repo if needed, <strong>private by default</strong> (<code>PUBLIC=1</code> to make it public), asks for
+confirmation, and uploads the card, the quantized files and the imatrix, never the BF16 file. The underlying command is
+<code>hf upload REPO DIR . --private --include "*.gguf" --include README.md</code>.</li>
+</ol>
+<p>Conventions people expect: a repo name ending in <code>-GGUF</code>, file names
+<code>&lt;model&gt;-&lt;type&gt;.gguf</code>, one repo per model with all its sizes, and the imatrix included so others can
+make more types. Files over 50 GB must be split (<code>llama-gguf-split --split-max-size 48G</code>); llama.cpp loads
+the parts from the first one.</p>
+
+<h3 id="move-wsl">5. Moving WSL to another drive, and growing its disk</h3>
+<p>This project lives in WSL's virtual disk (an <code>ext4.vhdx</code> file on C:), which is limited to 251 GB. The F:
+drive is a fast NVMe SSD (a Lexar NM790, like C:'s Samsung 980 PRO), so moving the whole distribution there costs no speed;
+the slowness of <code>/mnt/f</code> seen in step 4 is WSL's bridge to Windows files, not the drive. From PowerShell,
+with everything in WSL closed (this ends any running jobs):</p>
+<pre class="cmd"><code class="language-powershell">wsl --list --verbose                                    # the name of the distribution: Ubuntu-20.04 here
+wsl --shutdown
+wsl --manage Ubuntu-20.04 --move F:\WSL\Ubuntu          # copies the virtual disk (about 220 GB: minutes, not hours)
+wsl --manage Ubuntu-20.04 --resize 1000GB               # raise the size limit
+wsl                                                     # start it again, then inside:  df -h /
+</code></pre>
+<p>The distribution keeps its name (it is registered as Ubuntu-20.04 although Ubuntu 24.04 runs inside), and all paths
+inside stay the same, so nothing in the project changes. A backup first is cheap insurance:
+<code>wsl --export Ubuntu-20.04 F:\backup\ubuntu.tar</code>. Not run here: it would end this session.</p>
+
+<h2 id="step-7-speculative">Step 7: speculative decoding, more tokens per pass</h2>
+<p><a href="15-speed.html">▶ Animated in chapter 15 (the last two steps): drafting, checking, and the measured results</a></p>
+<p>Concept 15 showed that generating is limited by reading the weights, once per token. <strong>Speculative
+decoding</strong> gets several tokens out of one read: something cheap <em>drafts</em> the next few tokens, and the model
+<em>checks</em> all of them in a single forward pass, the same kind of pass that reads a prompt. Each draft token that
+matches what the model would have produced anyway is kept; the first that does not is replaced by the model's own token, and
+drafting starts again from there. If 3 guesses are right, one pass yields 4 tokens.</p>
+<p>It works because checking several tokens costs little more than producing one. Measured with <code>llama-bench</code>
+(one forward pass over N tokens):</p>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>one pass over</th><th>1 token</th><th>2</th><th>4</th><th>8</th><th>16</th></tr></thead>
+<tbody>
+<tr><td>Qwen3.5-2B (dense) Q4_K_M</td><td>2.95 ms</td><td>3.04</td><td>3.28</td><td>4.10</td><td>4.26</td></tr>
+<tr><td>19 B pruned MoE Q4_K_M</td><td>5.26 ms</td><td>5.96</td><td>7.29</td><td>9.75</td><td>13.46</td></tr>
+</tbody></table></div>
+<p>For the dense 2 B, four tokens cost 11% more than one. For the MoE, 39% more: each token in the pass picks its own 8
+experts, so the pass reads the union of their choices (the same effect as batching in concept 15).</p>
+<h3 id="spec-kinds">Three ways to draft</h3>
+<ul>
+<li><strong>MTP</strong> (multi-token prediction): an extra layer the model was trained with, which predicts the token after
+next from the main model's hidden state. It is the cheapest drafter possible, one layer. Qwen3.5 ships one; our 2 B GGUF
+kept it (<code>make_gguf.sh</code>), but our 19 B (<code>04_prune.py</code> drops it) and unsloth's 35 B GGUF have none.
+<code>llama-server --spec-type draft-mtp --spec-draft-n-max 3</code>.</li>
+<li><strong>A small draft model</strong> with the same tokenizer: <code>--spec-type draft-simple -md small.gguf -ngld 99</code>.
+Here Qwen3.5-2B drafted for the 19 B.</li>
+<li><strong>n-gram lookup</strong>: no model at all; if the last few tokens appeared earlier in the context, propose what
+followed them there. <code>--spec-type ngram-simple</code>. Made for repetitive output: editing or quoting text from the
+prompt.</li>
+</ul>
+<h3 id="spec-results">Measured</h3>
+<p><code>scripts/spec_sweep.sh</code> runs <code>spec_test.py</code> against each setting: four prompts (prose, code, a math
+word problem, and an edit that rewrites a 14-line function from the prompt), greedy, 256 tokens, thinking off. Tokens per
+second, and the share of drafted tokens that were kept; ≠ marks an answer that differs from the one without drafting:</p>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>Qwen3.5-2B</th><th>prose</th><th>code</th><th>math</th><th>edit</th></tr></thead>
+<tbody>
+<tr><td>no drafting</td><td>338</td><td>337</td><td>338</td><td>331</td></tr>
+<tr><td>MTP, 1 drafted</td><td>319 (64% kept) ≠</td><td>344 (88% kept) ≠</td><td>373 (96% kept)</td><td>395 (100% kept)</td></tr>
+<tr><td>MTP, 2 drafted</td><td>335 (51% kept) ≠</td><td>406 (74% kept) ≠</td><td>439 (90% kept)</td><td>434 (96% kept)</td></tr>
+<tr><td>MTP, 3 drafted (default)</td><td>313 (42% kept) ≠</td><td>381 (62% kept) ≠</td><td>490 (91% kept)</td><td>489 (95% kept)</td></tr>
+<tr><td>MTP, 4 drafted</td><td>292 (36% kept) ≠</td><td>343 (51% kept) ≠</td><td>476 (82% kept)</td><td>484 (87% kept)</td></tr>
+</tbody></table></div>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>19 B pruned</th><th>prose</th><th>code</th><th>math</th><th>edit</th></tr></thead>
+<tbody>
+<tr><td>no drafting</td><td>204</td><td>202</td><td>202</td><td>196</td></tr>
+<tr><td>Qwen3.5-2B as draft model</td><td>42 (46% kept) ≠</td><td>53 (63% kept) ≠</td><td>75 (88% kept)</td><td>93 (100% kept)</td></tr>
+<tr><td>n-gram lookup</td><td>201</td><td>198</td><td>167 (5% kept)</td><td>176 (34% kept)</td></tr>
+</tbody></table></div>
+<ul>
+<li><strong>MTP pays off where the text is predictable.</strong> On math and the edit task 91–95% of the guesses were
+right and generation went from about 335 to 490 tokens per second (+45%). On prose only 42% were right, and it was never faster,
+up to 14% <em>slower</em>: the wasted guesses cost more than the kept ones save. 2–3 drafted tokens is the sweet spot
+where the text allows it.</li>
+<li><strong>The drafter must be much cheaper than the model.</strong> The 2 B draft model guessed reasonably (46–100%), yet the
+19 B became 2–5x <em>slower</em>. Inside the server's loop each 2 B draft token cost about 5 ms, as much as a 19 B token, so
+drafting 3 cost more than the 19 B saved. Rule of thumb: a separate drafter should be 10x faster than the target, which
+is why the one-layer MTP head works and a 2 B drafting for an effectively 3 B-active MoE does not.</li>
+<li><strong>n-gram lookup found little to copy</strong> (no drafts at all on prose and code, 34% kept on the edit) and cost
+0–17%. It helps for long verbatim copies, such as editing a document, not for new text.</li>
+<li><strong>"Identical output" holds in exact arithmetic, not quite in floating point.</strong> Math and edit answers were
+bit-identical with and without MTP; prose and code differed. The first difference in the prose answer is token 5: after "A
+refrigerator operates on the", the model gives " principle" 48.3% and " principles" 47.5% when generating one token at a
+time, but 47.0% and 48.7% inside the batched checking pass. Different kernels, different rounding: the same lesson as bug 4,
+and harmless here, since both continuations are equally good.</li>
+</ul>
+<pre class="cmd"><code class="language-bash">scripts/spec_sweep.sh                                          # all settings above, ~5 min
+llama.cpp/build/bin/llama-bench -m MODEL.gguf -ngl 99 -p 1,2,4,8,16 -n 0   # the cost of checking N tokens
+</code></pre>
+
+<h2 id="what-this-taught">What this taught</h2>
+<ol>
+<li><strong>The criterion matters a lot.</strong> REAP (router weight x expert output norm,
+   averaged over the tokens the expert sees) beats raw usage frequency, which
+   beats random, at every domain. Frequency keeps "popular but low-impact" experts.</li>
+<li><strong>Qwen's routing is flat.</strong> The load-balancing loss spreads tokens out: the
+   128 most-used experts of a layer only take 74% of the traffic, so there is no
+   pile of dead experts to delete for free. 50% pruning costs ~20% perplexity and
+   the model stays fully usable; 81% (the 9B target) costs 2.4x and breaks it.
+   The cliff is somewhere between: K=96 costs 44%. A useful proxy computed from
+   the stats alone (<code>analyze_stats.py</code>): "routing mass kept" was 65% at K=128
+   (fine) vs 28% at K=48 (broken).</li>
+<li><strong>Reasoning text survives best, web/wikitext worst.</strong> "think" perplexity only
+   went 2.50 -&gt; 3.52; general web knowledge is spread over many specialists
+   (most specialists sit in late layers - see <code>results/analyze_stats.txt</code>).
+   The calibration mix decides which abilities survive.</li>
+<li><strong>Local healing does not fix it.</strong> Training only the routers to reproduce each
+   layer's output lowered the per-layer MSE but <em>raised</em> perplexity - at K=48
+   and again at K=128 (5.92 -&gt; 5.96). With
+   target=layer the MoE is asked to undo drift from earlier layers it cannot
+   undo; even target=moe is slightly worse. Hidden-state MSE is not the same as
+   next-token quality. Real recovery needs a loss on the logits (KL to the
+   teacher) through the whole model - i.e. actual distillation training, which
+   NVIDIA puts at 80-100B tokens for this level of compression.</li>
+<li><strong>Engineering gotchas hit along the way</strong> (charted in <a href="c-code.html">appendix C</a>):
+<ul>
+<li>parameters loaded with <code>assign=True</code> have <code>requires_grad=True</code>; without
+     <code>torch.no_grad()</code> autograd kept every micro-batch alive (58 GB "allocated").</li>
+<li><code>module.forward = lambda x, m=module: ...</code> is a reference cycle; each 1.7 GB
+     layer stayed on the GPU until Python's cycle GC ran (fixed: <code>patch_moe</code>
+     holds a weakref).</li>
+<li>On WSL/Windows, exceeding VRAM does not OOM: the driver silently spills to
+     system RAM and layers got up to 30x slower (145 s instead of ~5 s). <code>moe_stream.py</code> caps PyTorch at
+     85% of VRAM (<code>VRAM_FRACTION</code>) so problems fail loudly instead.</li>
+<li><code>index_add_</code> on a GPU adds with atomics in a random order, so two runs of the same model differed by up
+     to 0.15% perplexity per domain; a fixed-order sum made them bit-identical (step 5).</li>
+</ul></li>
+<li><strong>Perplexity and spot checks are not enough; benchmark.</strong> The 19 B prune was "+20% perplexity, all test
+   prompts correct", yet HumanEval showed it lost 16 points of coding ability and MMLU 13 points of knowledge. Validate
+   the grader first (the first MMLU parser scored below chance) and report confidence intervals (15 questions could not
+   separate the two pruned models; 164–300 can).</li>
+<li><strong>Distilling the routers helps a little, not a lot.</strong> End-to-end distillation (not the layer-wise healing of
+   runs 1 and 2) did lower the KL to the teacher by 18% and never hurt, but the benchmarks did not move beyond noise. The
+   routers can only pick among the surviving experts; knowledge in deleted ones needs trainable experts and far more data.
+   Verify a streamed backward pass with finite differences before trusting it; the first check here was a false alarm.</li>
+<li><strong>Measure, don't guess, and respect the noise.</strong> Statistics said late layers could lose the most experts;
+   measuring showed they are the most sensitive. Then an allocation built from noisy single-point measurements made things
+   worse (5.92 → 6.13). A measurement is only as good as its error bar and its range.</li>
+<li><strong>To go small, specialise.</strong> 48 experts calibrated on a general mix broke the model (run 1);
+   48 experts calibrated on code only kept code perplexity within 15% and passed all Python unit tests (run 3).
+   The cost moved to everything the calibration left out: general text got much worse, SQL never worked, and
+   "the capital of Australia" became the letter A. A smaller expert budget can only cover fewer domains.</li>
+<li><strong>Quantize before you prune.</strong> Down to about 3 bits per weight, quantization cost this model nothing the
+   benchmarks could see, while pruning half the experts cost 16 points of HumanEval. At the same 10.6 GiB the original
+   35 B at 2.6 bits beat the pruned 19 B at 4.9 bits by 9 points on average. Check how far plain quantization of the
+   full model gets you first; prune when that is not enough. And judge quantization by KL divergence, not perplexity:
+   perplexity stayed flat while the KL grew 9 times.</li>
+<li><strong>Specialisation is causal, but it lives in teams, and lift is not load.</strong> Deleting any one expert,
+   even a "specialist", changed no domain by more than 1%; deleting 4 topic experts per layer (1.6% of all) cost that
+   topic 25–51% and random teams of the same size under 1.2%. Experts with the most characteristic words often carry
+   under 1% of their topic; the ones that matter carry a large share of it. And measure the measurement first: GPU
+   atomic sums made two identical runs differ by more than one expert's effect.</li>
+<li><strong>Delete, don't merge, when experts are unrelated.</strong> Every merge variant lost to plain deletion
+   (7.3–7.9 against 5.9 perplexity at K=128, 27–39 against 11.7 at K=48). Qwen's experts barely resemble each other
+   (output cosine ~0.02), so an average serves neither; aligning neurons fixes their order, not their difference.</li>
+<li><strong>Check every conversion, and fit before you offload.</strong> A perplexity run per file catches a broken
+   conversion and shows what each type costs (a 2 B model paid 3.7% at Q4_K_M where the 19 B MoE paid nothing). Read the
+   errors: the MTP head and a half-written file were each one line in a log. And a MoE bigger than the GPU runs with its
+   experts in RAM (78 tokens per second here), but a quantization that fits ran at 173 with nearly the same quality.</li>
+<li><strong>Speculative decoding needs a cheap drafter and predictable text.</strong> The model's own one-layer MTP head
+   made math and edits 45% faster and prose no faster; a separate 2 B drafter made the 19 B MoE slower, because drafting cost
+   as much as the model it was helping.</li>
+</ol>
+<h2 id="disk-now">Disk (now)</h2>
+<div class="tablewrap"><table class="data">
+<thead><tr><th>path</th><th>size</th><th>needed for / how to get it back</th></tr></thead>
+<tbody>
+<tr><td>gguf/q35-reap-k128/*-Q4_K_M.gguf, *-IQ4_XS.gguf</td><td>11 + 9.5 GiB</td><td>the 19 B general model (run 2)</td></tr>
+<tr><td>gguf/q35-code-k48/*-Q4_K_M.gguf, *-IQ4_XS.gguf</td><td>4.9 + 4.5 GiB</td><td>the 8.9 B code model (run 3)</td></tr>
+<tr><td>/mnt/f/qwen-scratch/quant-sweep/q128-BF16.gguf</td><td>35 GiB</td><td>the 19 B in BF16, source for any other quantization (step 4), moved to the F: drive for step 5 (move it back to <code>gguf/quant-sweep/</code> to use the step 4 commands). Deletable; <code>convert_hf_to_gguf.py</code> rebuilds it from the checkpoint on F:</td></tr>
+<tr><td>/mnt/f/qwen-scratch/quant-sweep/q128-base.kld</td><td>7.6 GiB</td><td>the BF16 next-token distributions for <code>--kl-divergence</code> of a new type. Deletable; <code>14_quant_sweep.sh</code> rebuilds it</td></tr>
+<tr><td>/mnt/f/qwen-scratch/original-unsloth/Qwen3.5-35B-A3B-Q4_K_M.gguf</td><td>20.5 GiB</td><td>the unpruned 35 B at Q4_K_M, for the offload test (step 6); <code>DEST=… download_baseline.sh</code></td></tr>
+<tr><td>/mnt/f/qwen-scratch/step6/</td><td>14 GiB</td><td>Qwen3.5-2B: the safetensors (<code>models-Qwen3.5-2B</code>) and its GGUFs (<code>gguf-Qwen3.5-2B</code>), moved off the full WSL disk; <code>make_gguf.sh</code> expects them in <code>models/</code> and <code>gguf/</code></td></tr>
+<tr><td>/mnt/f/qwen-scratch/q35-reap-k128</td><td>36 GiB</td><td>the pruned 19 B HF checkpoint, on the Windows F: drive (rebuilt in step 4)</td></tr>
+<tr><td>results/expert_routing.pt</td><td>320 MiB</td><td>every token's 8 experts in every layer; <code>12_expert_tokens.py --analyse</code> re-reads it</td></tr>
+<tr><td>data/teacher_top32.pt, data/*.pt</td><td>200 MiB</td><td>teacher targets, calibration, eval and training token sets</td></tr>
+<tr><td>stats/calib.pt, stats/code.pt, stats/similarity.pt; results/</td><td>small</td><td>re-pruning or merging at any K without a new statistics pass; every eval, benchmark answer, ablation and log</td></tr>
+<tr><td><em>deleted:</em> models/Qwen3.5-35B-A3B</td><td>67 GiB</td><td>the original (teacher), for statistics, pruning, evaluation, distillation and ablation: <code>scripts/01_download.sh</code> (about 7 minutes)</td></tr>
+<tr><td><em>deleted:</em> gguf/q35-distill-k128</td><td>11 GiB</td><td>the 19 B with distilled routers (step 3), within noise of the plain prune: <code>11_patch_gguf.py</code> rebuilds it from <code>results/distill/routers.pt</code> in about a minute</td></tr>
+<tr><td><em>deleted:</em> models/q35-reap-k128, models/q35-code-k48</td><td>36 + 17 GiB</td><td><code>04_prune.py --stats stats/calib.pt|code.pt --keep 128|48</code> (3 min, needs the original)</td></tr>
+<tr><td><em>deleted:</em> BF16 GGUF of the code model</td><td>16 GiB</td><td><code>07_gguf.sh</code> rebuilds it; only needed to make other quantizations</td></tr>
+<tr><td><em>deleted:</em> gguf/original-unsloth</td><td>20.5 + 12.2 + 10.6 GiB</td><td><code>download_baseline.sh [file]</code>: Q4_K_M, UD-IQ3_XXS, UD-IQ2_M; their results are saved</td></tr>
+<tr><td><em>deleted:</em> step 4 quantizations</td><td>4.9–18 GiB each</td><td><code>llama-quantize --imatrix gguf/q35-reap-k128/imatrix.gguf gguf/quant-sweep/q128-BF16.gguf OUT TYPE</code></td></tr>
+</tbody></table></div>
+    </article>
+  </div>
+  <footer>Project notes for pruning Qwen3.5-35B-A3B. <a href="index.html">All animated chapters</a></footer>
+</div>
+<script>
+"use strict";
+/* copy buttons on command blocks */
+document.querySelectorAll("article pre.cmd").forEach((pre) => {
+  const b = document.createElement("button");
+  b.className = "copy"; b.type = "button"; b.textContent = "Copy";
+  b.addEventListener("click", () => {
+    const text = pre.querySelector("code").innerText;
+    const done = () => { b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1400); };
+    const fallback = () => { const r = document.createRange(); r.selectNodeContents(pre.querySelector("code")); const s = getSelection(); s.removeAllRanges(); s.addRange(r); b.textContent = "Selected"; };
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+  });
+  pre.appendChild(b);
+});
+/* highlight the section being read */
+const links = new Map([...document.querySelectorAll("nav.contents ol a")].map((a) => [a.getAttribute("href").slice(1), a]));
+const seen = new Map();
+const obs = new IntersectionObserver((entries) => {
+  entries.forEach((e) => seen.set(e.target.id, e.isIntersecting));
+  const first = [...links.keys()].find((id) => seen.get(id));
+  if (first) links.forEach((a, id) => a.classList.toggle("on", id === first));
+}, { rootMargin: "0px 0px -70% 0px" });
+links.forEach((_, id) => { const el = document.getElementById(id); if (el) obs.observe(el); });
+</script>
+</body>
+</html>

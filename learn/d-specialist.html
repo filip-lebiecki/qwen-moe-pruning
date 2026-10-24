@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Specialist Pruning</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Appendix D · run 3</div>
+    <h1>Specialist pruning: the same 9 B, calibrated on code</h1>
+    <p class="lede">With 48 of 256 experts per layer, a general calibration broke the model. The same budget calibrated on
+      code only gave a model that passes Python unit tests. Same pruning code, same K; only the calibration text changed.
+      Every grid and number here comes from the two statistics files of this project.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="tD">
+    <h2 id="tD">Try it: compare the two selections in any layer</h2>
+    <div class="row">
+      <label for="layer">Layer <input id="layer" type="range" min="0" max="39" value="14"></label>
+      <label for="kd">Keep K <input id="kd" type="range" min="8" max="128" step="8" value="48"></label>
+    </div>
+    <div class="row"><span class="readout" id="d-out"></span></div>
+    <div class="stage" id="d-stage"></div>
+    <p class="note">Real REAP rankings from <code>stats/calib.pt</code> (general calibration) and <code>stats/code.pt</code>
+      (code calibration). "Routing kept" = share of that kind of text's top-8 picks that land on a kept expert in this layer.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p>Pruning keeps what the calibration text uses. A general mix spreads 48 experts thinly over web text, chat, math and
+      code, and none of them is covered well enough. A code-only mix spends all 48 on code: code tokens keep 39% of their
+      routing instead of 27%, and held-out code perplexity rises only 15% instead of 69%.</p>
+    <p>The two selections still share about two thirds of their experts (68% at K = 48), because many experts are useful
+      for any text: grammar, formatting, numbers. The difference is in the remaining third, and it is largest in the middle
+      layers (layer 14: only 37.5% shared).</p>
+    <p>"Routing mass kept" is a proxy, not the whole story. On general text, both selections keep about 28% of the routing,
+      yet the code model's general perplexity is much worse (16.4 against 11.7). REAP keeps experts by contribution, and
+      the code selection dropped the experts that contribute most to general text, even where it kept similarly busy ones.</p>
+  </section>
+
+  <section class="facts" aria-label="Facts">
+    <div class="fact"><span class="k">Code perplexity at K=48</span><span class="v">3.23 vs 4.73</span><span class="n">code vs general calibration (original 2.80)</span></div>
+    <div class="fact"><span class="k">Kept-set overlap</span><span class="v">68% (K=48)</span><span class="n">mean over 40 layers; 37.5% in layer 14</span></div>
+    <div class="fact"><span class="k">Graded coding test</span><span class="v">12/15 vs 10/15</span><span class="n">8.9 B code vs 19 B general</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">--preset code</span><span class="n">02_calib_data.py, run_code_sweep.sh</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script src="d-specialist-data.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const CAT = { both: "var(--keep)", gen: "var(--h)", code: "var(--act)", none: "var(--grid)" };
+function classify(layer, K) {
+  return SPEC.rank_general[layer].map((rg, e) => {
+    const g = rg < K, c = SPEC.rank_code[layer][e] < K;
+    return g && c ? "both" : g ? "gen" : c ? "code" : "none";
+  });
+}
+function overlap(layer, K) { return classify(layer, K).filter((x) => x === "both").length / K; }
+function routingKept(layer, K, which, text) {
+  const ranks = which === "code" ? SPEC.rank_code : SPEC.rank_general, sh = text === "code" ? SPEC.share_code : SPEC.share_general;
+  return sh[layer].reduce((a, s, e) => a + (ranks[layer][e] < K ? s : 0), 0);
+}
+const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+
+const W = 960, HH = 470;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "Which experts a general and a code calibration keep");
+
+/* step 0: the two calibration mixes */
+const mixG = S("g", { cls: "fade" }, svg);
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "same pruning, same K = 48, two calibration sets" }, mixG);
+const MIX = [["general (runs 1, 2)", [["web", 25, "var(--h)"], ["chat", 25, "var(--route)"], ["math reasoning", 25, "var(--act)"], ["code reasoning", 25, "var(--keep)"]]],
+             ["code only (run 3)", [["code reasoning", 75, "var(--keep)"], ["Python instructions", 25, "var(--teach)"]]]];
+MIX.forEach(([name, parts], r) => {
+  const y = 80 + r * 90;
+  S("text", { x: 24, y: y - 10, "font-size": 13, "font-weight": 600, text: name }, mixG);
+  let x = 24;
+  parts.forEach(([lab, pct, col]) => {
+    const w = pct * 8.6;
+    const rect = S("rect", { x, y, width: w - 3, height: 34, rx: 4 }, mixG); rect.style.fill = col; rect.style.fillOpacity = 0.85;
+    S("text", { x: x + 8, y: y + 22, "font-size": 12, fill: "var(--panel)", text: `${lab} ${pct}%` }, mixG).style.fill = "var(--panel)";
+    x += w;
+  });
+});
+S("text", { x: 24, y: 300, "font-size": 12.5, cls: "t-dim", text: "Both: 524k tokens, the same 03_expert_stats.py pass, the same REAP ranking. Only the text differs." }, mixG);
+
+/* step 1 + try-it: a real layer grid */
+function drawGrid(parent, x0, y0, cell, layer, K) {
+  const cats = classify(layer, K);
+  const cells = parent._cells || (parent._cells = cats.map((_, e) => S("rect", { x: x0 + (e % 16) * cell, y: y0 + Math.floor(e / 16) * cell, width: cell - 3, height: cell - 3, rx: 3, cls: "fade" }, parent)));
+  cells.forEach((c, e) => { c.style.fill = CAT[cats[e]]; });
+  return cats;
+}
+const gridG = S("g", { cls: "fade hide" }, svg);
+const gridTitle = S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "" }, gridG);
+const gridCells = S("g", {}, gridG);
+const legendY = 400;
+[["both keep", "both"], ["only general", "gen"], ["only code", "code"], ["neither", "none"]].forEach(([lab, k], i) => {
+  const r = S("rect", { x: 24 + i * 112, y: legendY, width: 12, height: 12, rx: 3 }, gridG); r.style.fill = CAT[k];
+  S("text", { x: 42 + i * 112, y: legendY + 11, "font-size": 12, cls: "t-dim", text: lab }, gridG);
+});
+const gridNote = [0, 1, 2, 3].map((k) => S("text", { x: 400, y: 90 + k * 26, "font-size": 13, cls: k === 0 ? "" : "t-dim", text: "" }, gridG));
+
+/* step 2: overlap per layer */
+const ovG = S("g", { cls: "fade hide" }, svg);
+const OB = { x: 60, y: 60, w: 860, h: 300 };
+S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "share of kept experts both calibrations agree on, per layer (K = 48)" }, ovG);
+S("path", { d: `M${OB.x},${OB.y} V${OB.y + OB.h} H${OB.x + OB.w}`, cls: "wire" }, ovG);
+[0, 25, 50, 75, 100].forEach((v) => { const y = OB.y + OB.h - (v / 100) * OB.h; S("line", { x1: OB.x, x2: OB.x + OB.w, y1: y, y2: y, stroke: "var(--grid)" }, ovG); S("text", { x: OB.x - 8, y: y + 4, "text-anchor": "end", "font-size": 10.5, cls: "t-faint t-mono", text: v + "%" }, ovG); });
+const ovBars = Array.from({ length: 40 }, (_, l) => S("rect", { x: OB.x + 4 + l * (OB.w / 40), y: OB.y + OB.h, width: OB.w / 40 - 5, height: 0, rx: 2, cls: "f-keep" }, ovG));
+for (let l = 0; l < 40; l += 5) S("text", { x: OB.x + 4 + l * (OB.w / 40) + 8, y: OB.y + OB.h + 16, "text-anchor": "middle", "font-size": 10.5, cls: "t-faint t-mono", text: l }, ovG);
+S("text", { x: OB.x + OB.w, y: OB.y + OB.h + 34, "text-anchor": "end", "font-size": 11, cls: "t-dim", text: "layer" }, ovG);
+const ovMean = S("text", { x: OB.x + 10, y: OB.y + 18, "font-size": 13, "font-weight": 600, cls: "t-mono", text: "" }, ovG);
+
+/* steps 3-6: bar comparisons */
+const barG = S("g", { cls: "fade hide" }, svg);
+const barTitle = S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: "" }, barG);
+const barSub = S("text", { x: 24, y: 54, "font-size": 12, cls: "t-dim", text: "" }, barG);
+const BR = Array.from({ length: 7 }, (_, k) => {
+  const y = 84 + k * 46;
+  return { lab: S("text", { x: 24, y: y + 20, "font-size": 12.5, text: "" }, barG), bar: S("rect", { x: 270, y: y + 4, width: 0, height: 24, rx: 4 }, barG), val: S("text", { x: 270, y: y + 21, "font-size": 12.5, "font-weight": 600, cls: "t-mono", text: "" }, barG) };
+});
+const foot = [0, 1].map((k) => S("text", { x: 24, y: 0, "font-size": 13, cls: k ? "t-dim" : "", text: "" }, barG));
+function footnote(y, a, b) { foot[0].setAttribute("y", y); foot[1].setAttribute("y", y + 22); foot[0].textContent = a; foot[1].textContent = b || ""; }
+const quote = S("g", { cls: "fade hide" }, svg);
+S("rect", { x: 24, y: 330, width: 912, height: 110, rx: 8, cls: "box-soft" }, quote);
+["Asked: \"What is the capital of Australia, and why isn't it Sydney?\"",
+ "Code specialist: \"The capital of Australia is A. It isn't Syland (or \"Sy\") because capital letters",
+ "are determined by the Unicode character encoding…\"",
+ "Its kept experts know \"capital\" from code: upper-case letters, CONSTANT_NAMES, str.capitalize()."].forEach((t, k) =>
+  S("text", { x: 40, y: 358 + k * 24, "font-size": 13, cls: k === 0 ? "t-dim" : k === 3 ? "t-act" : "t-mono", text: t }, quote));
+
+function bars(title, sub, rows, max, fmt) {
+  barTitle.textContent = title; barSub.textContent = sub;
+  BR.forEach((b, k) => {
+    const r = rows[k];
+    show(b.lab, !!r); show(b.bar, !!r); show(b.val, !!r);
+    if (!r) return;
+    b.lab.textContent = r[0];
+    b.bar.style.fill = r[2];
+    const w = (r[1] / max) * 560;
+    animAttrs(b.bar, { width: w }, 800);
+    b.val.setAttribute("x", 270 + w + 8); b.val.textContent = fmt(r[1]);
+  });
+}
+
+const L14 = 14, KK = 48;
+const ovs = Array.from({ length: 40 }, (_, l) => overlap(l, KK));
+const steps = [
+  { title: "Same budget, a different question", text: "Runs 1 and 2 calibrated on a general mix. Run 3 asks a narrower question: if the model only needs to be good at code, which 48 experts per layer should it keep? Only the calibration text changes." },
+  { title: "Which experts survive in one layer", text: "Layer 14 at K = 48, from the real statistics. Teal: both calibrations keep the expert. Blue: only the general one. Amber: only the code one. This is the layer where they disagree most." },
+  { title: "Two thirds of the choices are shared", text: "Across all 40 layers the two selections agree on 68% of the kept experts. Many experts serve any text. The disagreement sits in the middle layers, where specialised experts live." },
+  { title: "Code tokens keep more of their routing", text: "Averaged over layers, code tokens' top-8 picks land on a kept expert 39% of the time with the code selection, against 27% with the general one. Fewer of their favourite experts are missing." },
+  { title: "Measured: code perplexity", text: "Held-out code text. Code calibration loses 9%, 15% and 30% at 64, 48 and 32 experts; general calibration loses 58%, 69% and 112%. At every size the specialist is far ahead on code.", ms: 7000 },
+  { title: "Measured: the price on everything else", text: "On the general eval set, the code model at 48 experts scores 16.4 where the general one scored 11.7. And asked about the capital of Australia, it answered with a letter.", ms: 8000 },
+  { title: "Measured: graded coding answers", text: "5 coding prompts, 3 runs each, graded by running the code. The 8.9 B specialist matched or beat the 19 B general model. Appendix E repeats this with 714 benchmark questions per model." },
+];
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    show(mixG, i === 0); show(gridG, i === 1); show(ovG, i === 2); show(barG, i >= 3); show(quote, i === 5);
+    if (i === 1) {
+      const cats = drawGrid(gridCells, 24, 60, 20, L14, KK);
+      gridTitle.textContent = `layer ${L14}, keep ${KK} of 256 (real REAP rankings)`;
+      const n = (k) => cats.filter((x) => x === k).length;
+      gridNote[0].textContent = `${n("both")} kept by both  ·  ${(overlap(L14, KK) * 100).toFixed(1)}% overlap`;
+      gridNote[1].textContent = `${n("gen")} kept only by the general calibration`;
+      gridNote[2].textContent = `${n("code")} kept only by the code calibration`;
+      gridNote[3].textContent = `${n("none")} deleted by both`;
+    }
+    if (i === 2) {
+      ovBars.forEach((b, l) => { const h = ovs[l] * OB.h; animAttrs(b, { height: h, y: OB.y + OB.h - h }, 700); });
+      ovMean.textContent = `mean ${(mean(ovs) * 100).toFixed(0)}% · lowest layer ${ovs.indexOf(Math.min(...ovs))} (${(Math.min(...ovs) * 100).toFixed(1)}%)`;
+    }
+    if (i === 3) {
+      const ck = mean(Array.from({ length: 40 }, (_, l) => routingKept(l, KK, "code", "code")));
+      const gk = mean(Array.from({ length: 40 }, (_, l) => routingKept(l, KK, "general", "code")));
+      bars("code tokens' routing that still lands on a kept expert (K = 48)", "mean over 40 layers, from the real statistics",
+        [["code calibration", ck * 100, "var(--act)"], ["general calibration", gk * 100, "var(--h)"]], 50, (v) => v.toFixed(1) + "%");
+      footnote(240, "Every pick that misses falls back to the token's next-best surviving expert (chapter 5).",
+        `With the code selection, ${(100 - ck * 100).toFixed(0)}% of code picks fall back; with the general one, ${(100 - gk * 100).toFixed(0)}%. Fewer fallbacks, less damage.`);
+    }
+    if (i === 4) bars("held-out code perplexity (lower is better; original 2.80)", "data/eval_code.pt, 05_eval.py",
+      [["code calib, 64 experts", 3.04, "var(--act)"], ["general calib, 64", 4.43, "var(--h)"], ["code calib, 48 experts", 3.23, "var(--act)"], ["general calib, 48", 4.73, "var(--h)"], ["code calib, 32 experts", 3.64, "var(--act)"], ["general calib, 32", 5.93, "var(--h)"]], 6.5, (v) => v.toFixed(2));
+    if (i === 5) bars("general perplexity at 48 experts (lower is better; original 4.92)", "data/eval.pt: web, chat, reasoning, wikitext",
+      [["general calibration", 11.7, "var(--h)"], ["code calibration", 16.4, "var(--act)"]], 18, (v) => v.toFixed(1));
+    if (i === 6) {
+      bars("graded coding answers (ask.py --set code --check, 3 runs x 5)", "Python unit tests, SQL on sqlite, an exact list",
+        [["code specialist, 8.9 B", 12, "var(--act)"], ["general, 19 B", 10, "var(--h)"]], 15, (v) => `${v}/15`);
+      footnote(240, "Python 9/9 vs 8/9, list comprehension 3/3 vs 2/3, SQL 0/3 for both (no SQL in either calibration set).",
+        "15 answers is a small sample: read it as \"at least as good at Python with half the parameters\".");
+    }
+    if (i < 3 || i === 4 || i === 5) footnote(-100, "", "");
+  },
+});
+
+/* try it */
+const ds = svgRoot(document.getElementById("d-stage"), 760, 360, "Kept experts of one layer under both calibrations");
+const tg = S("g", {}, ds);
+const tLegend = [["both keep", "both"], ["only general", "gen"], ["only code", "code"], ["neither", "none"]];
+tLegend.forEach(([lab, k], i) => { const r = S("rect", { x: 400, y: 30 + i * 26, width: 12, height: 12, rx: 3 }, ds); r.style.fill = CAT[k]; S("text", { x: 418, y: 41 + i * 26, "font-size": 12, cls: "t-dim", text: lab }, ds); });
+const tOut = [0, 1, 2, 3, 4].map((k) => S("text", { x: 400, y: 160 + k * 24, "font-size": 12.5, cls: "t-mono", text: "" }, ds));
+function tryD() {
+  const l = +document.getElementById("layer").value, K = +document.getElementById("kd").value;
+  drawGrid(tg, 14, 14, 21, l, K);
+  document.getElementById("d-out").textContent = `layer ${l}, keep ${K}: ${(overlap(l, K) * 100).toFixed(1)}% of kept experts shared`;
+  tOut[0].textContent = "routing kept in this layer:";
+  tOut[1].textContent = `code text,    code selection    ${(routingKept(l, K, "code", "code") * 100).toFixed(1)}%`;
+  tOut[2].textContent = `code text,    general selection ${(routingKept(l, K, "general", "code") * 100).toFixed(1)}%`;
+  tOut[3].textContent = `general text, code selection    ${(routingKept(l, K, "code", "general") * 100).toFixed(1)}%`;
+  tOut[4].textContent = `general text, general selection ${(routingKept(l, K, "general", "general") * 100).toFixed(1)}%`;
+}
+["layer", "kd"].forEach((id) => document.getElementById(id).addEventListener("input", tryD));
+tryD();
+</script>
+</body>
+</html>

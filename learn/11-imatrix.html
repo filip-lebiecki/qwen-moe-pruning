@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Importance Matrix</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Chapter 11</div>
+    <h1>The importance matrix (imatrix)</h1>
+    <p class="lede">Not all rounding errors hurt equally. A weight that multiplies a usually-large input matters more than
+      one that multiplies a usually-tiny input. The imatrix measures input sizes on calibration text, and the quantizer
+      spends its precision where it counts.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="try11">
+    <h2 id="try11">Try it: when does the imatrix help most?</h2>
+    <div class="row">
+      <label for="spread">How uneven the inputs are <input id="spread" type="range" min="0" max="100" value="100"></label>
+      <label for="qb">Bits <input id="qb" type="range" min="2" max="5" value="3"></label>
+      <button class="btn" id="neww" type="button">New weights</button>
+    </div>
+    <div class="row"><span class="readout" id="im-out"></span></div>
+    <div class="stage" id="im-stage"></div>
+    <p class="note">Both methods use the same bits and the same number of levels; they only choose the block's scale and
+      minimum differently. Output error is measured on 2000 simulated calibration inputs. When all inputs are equally large
+      the two methods agree; the more uneven the inputs, the more the imatrix helps. Real hidden states are very uneven
+      (a few channels carry huge values), which is why the imatrix matters so much for 4-bit and lower.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p>Each output of a matrix is <code>y = Σ_j w_j · x_j</code>. Rounding <i>w_j</i> to <i>q_j</i> changes the output by
+      <code>Σ_j (w_j − q_j) · x_j</code>, so on average the output error is <code>Σ_j E[x_j²] · (w_j − q_j)²</code>.
+      Columns whose inputs are usually large dominate.</p>
+    <p><code>llama-imatrix</code> runs calibration text through the full-precision model and, for every weight matrix
+      (every expert separately), stores <code>imp_j = mean(x_j²)</code> per input column. <code>llama-quantize</code> then
+      picks each block's scale to minimise the weighted error <code>Σ imp_j · (w_j − q_j)²</code>. It is called a matrix
+      because the full version would be <code>XᵀX</code>; llama.cpp keeps only its diagonal.</p>
+    <p>Same idea as REAP, one level down. REAP uses calibration data to decide which experts survive, and the imatrix uses
+      it to decide which weight columns get the precision.</p>
+  </section>
+
+  <section class="facts" aria-label="In this project">
+    <div class="fact"><span class="k">Calibration for imatrix</span><span class="v">256 chunks x 1024</span><span class="n">decoded from data/calib.pt</span></div>
+    <div class="fact"><span class="k">imatrix.gguf</span><span class="v">187 MB</span><span class="n">K=128 model, 21 min on this GPU</span></div>
+    <div class="fact"><span class="k">Result</span><span class="v">8.52 / 8.51 vs 8.55</span><span class="n">Q4_K_M / IQ4_XS vs BF16, wikitext</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">llama-imatrix</span><span class="n">scripts/07_gguf.sh</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const N = 16;
+function makeCase(seed, spread) {
+  const r = rng(seed);
+  const w = Array.from({ length: N }, () => gauss(r) * 0.02);
+  const sig = Array.from({ length: N }, (_, j) => Math.exp(gauss(r) * 1.1 * spread));
+  return { w, sig };
+}
+function samples(sig, n, seed) { const r = rng(seed); return Array.from({ length: n }, () => sig.map((s) => gauss(r) * s)); }
+/* asymmetric block quantization with a scale and a minimum, like Q4_K: q = m + s * clamp(round((w - m) / s), 0, 2^bits - 1) */
+function quant(w, p, bits) { const L = (1 << bits) - 1; return w.map((x) => p.m + p.s * clamp(Math.round((x - p.m) / p.s), 0, L)); }
+function bestParams(w, imp, bits) { // grid search over scale and minimum, minimising Σ imp_j (w_j - q_j)²
+  const lo = Math.min(...w), hi = Math.max(...w), L = (1 << bits) - 1;
+  let best = [Infinity, null];
+  for (let fs = 0.5; fs <= 1.3; fs += 0.02) {
+    const sc = ((hi - lo) / L) * fs;
+    for (let fm = -1; fm <= 1; fm += 0.05) {
+      const p = { s: sc, m: lo + fm * sc }, q = quant(w, p, bits);
+      const e = w.reduce((a, x, j) => a + imp[j] * (x - q[j]) ** 2, 0);
+      if (e < best[0]) best = [e, p];
+    }
+  }
+  return best[1];
+}
+function outErr(w, q, X) { let s = 0; for (const x of X) { let d = 0; for (let j = 0; j < N; j++) d += (w[j] - q[j]) * x[j]; s += d * d; } return Math.sqrt(s / X.length); }
+
+/* main case */
+const C = makeCase(75, 1.0); // seed chosen as the median case of 79 random draws (26% gain)
+C.sig[3] = 4.2; C.sig[11] = 3.1; // two "massive activation" channels, as in real hidden states
+const X = samples(C.sig, 2000, 5);
+const IMP = C.sig.map((_, j) => X.reduce((a, x) => a + x[j] * x[j], 0) / X.length);
+const BITS = 3;
+const ones = new Array(N).fill(1);
+const pPlain = bestParams(C.w, ones, BITS), qPlain = quant(C.w, pPlain, BITS);
+const pImp = bestParams(C.w, IMP, BITS), qImp = quant(C.w, pImp, BITS);
+const ePlain = outErr(C.w, qPlain, X), eImp = outErr(C.w, qImp, X);
+
+const W = 960, HH = 490;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "Input sizes, weights, rounding errors and output error");
+const X0 = 70, CWD = 34, colX = (j) => X0 + j * CWD;
+/* formula */
+const formula = S("text", { x: 24, y: 30, "font-size": 15, cls: "t-mono", text: "y = w₁·x₁ + w₂·x₂ + … + w₁₆·x₁₆" }, svg);
+S("text", { x: 24, y: 50, "font-size": 11.5, cls: "t-dim", text: "one output of a weight matrix, 16 of its 2048 inputs shown" }, svg);
+/* inputs row */
+const IY = 70, IH = 110;
+const inG = S("g", { cls: "fade" }, svg);
+S("text", { x: 24, y: IY + 12, "font-size": 11, cls: "t-dim", text: "x" }, inG);
+const inBars = [], impBars = [];
+for (let j = 0; j < N; j++) {
+  inBars.push(S("rect", { x: colX(j) + 4, y: IY + IH / 2, width: CWD - 8, height: 0, rx: 2, cls: "f-h fade" }, inG));
+  impBars.push(S("rect", { x: colX(j) + 4, y: IY + IH, width: CWD - 8, height: 0, rx: 2, cls: "f-act fade hide" }, inG));
+  S("text", { x: colX(j) + CWD / 2, y: IY + IH + 14, "text-anchor": "middle", "font-size": 10, cls: "t-faint t-mono", text: j + 1 }, inG);
+}
+S("line", { x1: X0, x2: colX(N), y1: IY + IH / 2, y2: IY + IH / 2, stroke: "var(--ink3)", "stroke-width": 0.8 }, inG);
+const inLabel = S("text", { x: colX(N) + 12, y: IY + 20, "font-size": 12, text: "" }, svg);
+const inLabel2 = S("text", { x: colX(N) + 12, y: IY + 38, "font-size": 11.5, cls: "t-dim", text: "" }, svg);
+const tokCount = S("text", { x: colX(N) + 12, y: IY + 62, "font-size": 12, cls: "t-mono t-act", text: "" }, svg);
+/* weights row */
+const WY = 220, WH = 150, wmax = Math.max(...C.w.map(Math.abs), ...qPlain.map(Math.abs), ...qImp.map(Math.abs)) * 1.08;
+const wy = (v) => WY + WH / 2 - (v / wmax) * (WH / 2);
+const wG = S("g", { cls: "fade" }, svg);
+S("text", { x: 24, y: WY + 12, "font-size": 11, cls: "t-dim", text: "w" }, wG);
+S("rect", { x: X0, y: WY, width: N * CWD, height: WH, rx: 5, cls: "box-soft" }, wG);
+S("line", { x1: X0, x2: colX(N), y1: wy(0), y2: wy(0), stroke: "var(--ink3)", "stroke-width": 0.8 }, wG);
+const levG = S("g", {}, wG);
+const wBars = [], wErr = [], wMark = [];
+for (let j = 0; j < N; j++) {
+  wBars.push(S("rect", { x: colX(j) + 6, y: wy(0), width: CWD - 12, height: 0, rx: 2, cls: "f-h" }, wG));
+  wErr.push(S("rect", { x: colX(j) + 6, y: 0, width: CWD - 12, height: 0, cls: "f-cut fade hide" }, wG));
+  wMark.push(S("rect", { x: colX(j) + 5, y: 0, width: CWD - 10, height: 2.4, cls: "f-act fade hide" }, wG));
+}
+const wLabel = S("text", { x: colX(N) + 12, y: WY + 20, "font-size": 12, text: "" }, svg);
+const wLabel2 = S("text", { x: colX(N) + 12, y: WY + 38, "font-size": 11.5, cls: "t-dim", text: "" }, svg);
+/* contributions + output error */
+const OY = 400;
+const oG = S("g", { cls: "fade hide" }, svg);
+S("text", { x: 24, y: OY + 12, "font-size": 11, cls: "t-dim", text: "imp·err²" }, oG);
+const contrib = Array.from({ length: N }, (_, j) => S("rect", { x: colX(j) + 6, y: OY, width: CWD - 12, height: 0, rx: 2, cls: "f-cut" }, oG));
+const outG = S("g", { cls: "fade hide" }, svg);
+const OB = { x: colX(N) + 12, y: 300 };
+S("text", { x: OB.x, y: OB.y, "font-size": 13, "font-weight": 600, text: "output error (RMS over 2000 inputs)" }, outG);
+const ob = [["plain rounding", ePlain, "f-h"], ["imatrix-weighted", eImp, "f-keep"]].map(([n, e, c], k) => {
+  const y = OB.y + 18 + k * 44;
+  S("text", { x: OB.x, y: y + 12, "font-size": 12, cls: "t-dim", text: n }, outG);
+  const b = S("rect", { x: OB.x, y: y + 18, width: 0, height: 16, rx: 3, cls: c }, outG);
+  const t = S("text", { x: OB.x, y: y + 31, "font-size": 11.5, cls: "t-mono", text: e.toFixed(4) }, outG);
+  return [b, e, t];
+});
+const gain = S("text", { x: OB.x, y: OB.y + 120, "font-size": 13, "font-weight": 600, cls: "t-keep fade hide", text: `${((1 - eImp / ePlain) * 100).toFixed(0)}% less output error, same bits` }, svg);
+
+function drawWeights(q) {
+  C.w.forEach((v, j) => { const y = wy(v); animAttrs(wBars[j], { y: Math.min(y, wy(0)), height: Math.abs(y - wy(0)) }, 400); });
+  clear(levG);
+  if (q) {
+    const p = q === qPlain ? pPlain : pImp;
+    for (let k = 0; k < 1 << BITS; k++) S("line", { x1: X0, x2: colX(N), y1: wy(p.m + k * p.s), y2: wy(p.m + k * p.s), stroke: "var(--route)", "stroke-opacity": 0.4 }, levG);
+  }
+  C.w.forEach((v, j) => {
+    show(wErr[j], !!q); show(wMark[j], !!q);
+    if (!q) return;
+    const a = wy(v), b = wy(q[j]);
+    wErr[j].setAttribute("y", Math.min(a, b)); wErr[j].setAttribute("height", Math.max(1.2, Math.abs(a - b)));
+    wMark[j].setAttribute("y", b - 1.2);
+  });
+}
+function drawContrib(q, on) {
+  const c = C.w.map((v, j) => IMP[j] * (v - (q ? q[j] : v)) ** 2), mx = Math.max(...C.w.map((v, j) => IMP[j] * (v - qPlain[j]) ** 2));
+  contrib.forEach((r, j) => animAttrs(r, { height: on ? (c[j] / mx) * 70 : 0 }, 500));
+}
+function setImp(on, frac = 1) {
+  const mx = Math.max(...IMP);
+  impBars.forEach((r, j) => { const h = (Math.sqrt(IMP[j] / mx) * IH) * frac; r.setAttribute("height", h); r.setAttribute("y", IY + IH - h); show(r, on); });
+}
+let anim = null;
+function stop() { if (anim) { anim(); anim = null; } }
+function showSample(k) {
+  const x = X[k], mx = Math.max(...C.sig) * 2.2;
+  x.forEach((v, j) => { const h = clamp(v / mx, -0.5, 0.5) * IH; inBars[j].setAttribute("y", IY + IH / 2 - Math.max(h, 0)); inBars[j].setAttribute("height", Math.abs(h)); });
+}
+
+const steps = [
+  { title: "One output is a weighted sum", text: "Each output number of a matrix multiplies every input by a weight and adds them up. Here 16 inputs and their 16 weights." },
+  { title: "Inputs differ in size", text: "Watch the inputs for different tokens. Most channels stay small, but channels 4 and 12 are usually large. Real hidden states have a few such channels with huge values.", ms: 6000 },
+  { title: "llama-imatrix measures them", text: "Run calibration text through the model and keep, per input column, the average of x². That average is the column's importance. This is what imatrix.gguf stores, for every matrix and every expert.", ms: 6500 },
+  { title: "Plain rounding: equal care everywhere", text: "Without an imatrix, the block's scale and minimum are chosen to minimise Σ(w − q)². The rounding errors (red) land wherever they fall, regardless of the inputs. Shown at 3 bits so the errors are easy to see." },
+  { title: "But the output feels errors unequally", text: "An error on column j changes the output by (w_j − q_j)·x_j. Bottom row: each column's share of the output error, imp_j·(w_j − q_j)². The two large-input columns dominate." },
+  { title: "imatrix-weighted rounding", text: "Choose the scale and minimum that minimise Σ imp_j·(w_j − q_j)² instead. Same bits, same number of levels, placed differently: the large-input columns are now rounded more accurately, the small-input ones take more error." },
+  { title: "Less error where it matters", text: "Measured on 2000 simulated inputs, the output error drops by about a quarter. This example is the median of 79 random draws; the middle half of them gained 14% to 39%." },
+  { title: "On the real model", text: "With the imatrix, Q4_K_M and IQ4_XS of the 19 B model scored 8.52 and 8.51 on wikitext against 8.55 for BF16, within noise. All measurable damage came from pruning, none from 4-bit." },
+];
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    stop();
+    show(oG, i >= 4); show(outG, i >= 6); show(gain, i >= 6);
+    tokCount.textContent = "";
+    inLabel.textContent = i <= 1 ? "inputs x for one token" : "importance = mean(x²)";
+    inLabel2.textContent = i === 1 ? "they change with every token" : i >= 2 ? "amber: measured on calibration text" : "";
+    wLabel.textContent = i <= 2 ? "weights w (exact)" : i <= 4 ? "rounded, plain" : "rounded, imatrix-weighted";
+    wLabel2.textContent = i >= 3 ? "red = rounding error, violet = levels" : "";
+    ob.forEach(([b, e]) => animAttrs(b, { width: i >= 6 ? (e / ePlain) * 200 : 0 }, 800));
+    ob.forEach(([b, e, t]) => t.setAttribute("x", OB.x + (e / ePlain) * 200 + 6));
+    if (i <= 1) { setImp(false); showSample(0); }
+    if (i === 1) { let k = 0; const id = setInterval(() => showSample(++k % 200), 260); anim = () => clearInterval(id); }
+    if (i === 2) {
+      let k = 0; setImp(true, 0);
+      const id = setInterval(() => { k++; showSample(k); setImp(true, Math.min(1, k / 18)); tokCount.textContent = `${Math.min(k * 110, 2000)} tokens`; if (k > 20) { clearInterval(id); tokCount.textContent = "2000 tokens"; } }, 260);
+      anim = () => clearInterval(id);
+    }
+    if (i >= 3) { setImp(true); inBars.forEach((r) => r.setAttribute("height", 0)); }
+    drawWeights(i <= 2 ? null : i <= 4 ? qPlain : qImp);
+    drawContrib(i <= 4 ? qPlain : qImp, i >= 4);
+  },
+});
+
+/* try it */
+const is = document.getElementById("im-stage");
+const isv = svgRoot(is, 760, 170, "Output error with and without the imatrix");
+const TB = [["plain rounding", "f-h"], ["imatrix-weighted", "f-keep"]].map(([n, c], k) => {
+  const y = 20 + k * 60;
+  S("text", { x: 10, y: y + 14, "font-size": 12.5, cls: "t-dim", text: n }, isv);
+  const b = S("rect", { x: 150, y, width: 0, height: 22, rx: 3, cls: c }, isv);
+  const t = S("text", { x: 150, y: y + 16, "font-size": 12, cls: "t-mono", text: "" }, isv);
+  return { b, t };
+});
+const isig = S("g", { transform: "translate(150,140)" }, isv);
+let tseed = 1;
+function tryIm() {
+  const spread = +document.getElementById("spread").value / 100, bits = +document.getElementById("qb").value;
+  const c = makeCase(100 + tseed, spread);
+  const Xs = samples(c.sig, 2000, 9 + tseed), imp = c.sig.map((_, j) => Xs.reduce((a, x) => a + x[j] * x[j], 0) / Xs.length);
+  const qp = quant(c.w, bestParams(c.w, ones, bits), bits), qi = quant(c.w, bestParams(c.w, imp, bits), bits);
+  const ep = outErr(c.w, qp, Xs), ei = outErr(c.w, qi, Xs), mx = Math.max(ep, ei);
+  [[ep], [ei]].forEach(([e], k) => { TB[k].b.setAttribute("width", (e / mx) * 520); TB[k].t.setAttribute("x", 150 + (e / mx) * 520 + 6); TB[k].t.textContent = e.toFixed(4); });
+  clear(isig);
+  const m = Math.max(...imp);
+  imp.forEach((v, j) => S("rect", { x: j * 22, y: -Math.sqrt(v / m) * 26, width: 16, height: Math.sqrt(v / m) * 26, rx: 2, cls: "f-act" }, isig));
+  S("text", { x: N * 22 + 8, y: -6, "font-size": 11, cls: "t-dim", text: "input importance per column" }, isig);
+  document.getElementById("im-out").textContent = `${bits} bits · imatrix lowers output error by ${((1 - ei / ep) * 100).toFixed(0)}%`;
+}
+["spread", "qb"].forEach((id) => document.getElementById(id).addEventListener("input", tryIm));
+document.getElementById("neww").addEventListener("click", () => { tseed++; tryIm(); });
+tryIm();
+</script>
+</body>
+</html>

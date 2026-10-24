@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Decoder Layers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Chapter 2</div>
+    <h1>Layers</h1>
+    <p class="lede">The model is a stack of 40 decoder layers. Each one reads every token's hidden state, adds a correction,
+      and passes it on. Knowing this shape explains both how we can run a 67 GiB model on a 16 GB GPU and why pruning errors pile up.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="try2">
+    <h2 id="try2">Try it: how a small error travels</h2>
+    <div class="row">
+      <label for="errlayer">Damage layer <input id="errlayer" type="range" min="0" max="39" value="3"></label>
+      <span class="readout" id="errlayer-out">layer 3</span>
+      <label for="everylayer"><input id="everylayer" type="checkbox"> also damage every later layer a little (like pruning all of them)</label>
+    </div>
+    <div class="stage" id="drift-stage"></div>
+    <p class="note">Illustration, not a measurement: each layer passes the deviation on and slightly amplifies it.
+      The residual stream never "forgets" a wrong correction. Later layers read it and build on it.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p>Every layer has the same two halves. The <b>token mixer</b> lets tokens exchange information (Gated DeltaNet in
+      30 layers, full attention in 10, in a repeating 3:1 pattern). The <b>feed-forward</b> part works on each token alone,
+      and in this model it is the Mixture of Experts. RMSNorm rescales the vector before each half.</p>
+    <p>The <b>residual connection</b> means each half only <i>adds</i> to the hidden state. Two consequences:
+      to run layer 17 you need only layer 17's weights and the hidden states that came out of layer 16, which is how
+      <code>moe_stream.py</code> streams the model one layer at a time. And an error made in layer 3 is still in the
+      hidden state at layer 39 ("drift").</p>
+  </section>
+
+  <section class="facts" aria-label="In this project">
+    <div class="fact"><span class="k">Layers</span><span class="v">40</span><span class="n">30 Gated DeltaNet + 10 full attention</span></div>
+    <div class="fact"><span class="k">One layer</span><span class="v">~1.7 GB</span><span class="n">BF16, 90% of it is the 256 experts</span></div>
+    <div class="fact"><span class="k">Peak GPU use</span><span class="v">3.8 GiB</span><span class="n">stats pass, streaming one layer</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">Streamer.layers()</span><span class="n">loads layer i+1 while layer i runs</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const W = 960, HH = 470;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "A stack of 40 decoder layers and the inside of one layer");
+const isAttn = (l) => (l + 1) % 4 === 0;
+
+/* tower of 40 layers */
+const TW = { x: 34, y0: 440, h: 9.6, w: 92 };
+const tower = S("g", {}, svg);
+S("text", { x: TW.x, y: 22, "font-size": 13, "font-weight": 600, text: "40 layers" }, tower);
+const tl = [];
+for (let l = 0; l < 40; l++) {
+  const y = TW.y0 - (l + 1) * TW.h;
+  tl.push(S("rect", { x: TW.x, y, width: TW.w, height: TW.h - 2, rx: 2, cls: (isAttn(l) ? "f-route-soft" : "f-h-soft") + " fade" }, tower));
+}
+S("text", { x: TW.x + TW.w + 6, y: TW.y0 - 4, "font-size": 11, cls: "t-faint t-mono", text: "0" }, tower);
+S("text", { x: TW.x + TW.w + 6, y: TW.y0 - 40 * TW.h + 8, "font-size": 11, cls: "t-faint t-mono", text: "39" }, tower);
+const legend = S("g", { transform: `translate(${TW.x},${TW.y0 + 18})` }, svg);
+S("rect", { width: 10, height: 10, rx: 2, cls: "f-h-soft", stroke: "var(--h)" }, legend);
+S("text", { x: 14, y: 9, "font-size": 11, cls: "t-dim", text: "DeltaNet" }, legend);
+S("rect", { x: 74, width: 10, height: 10, rx: 2, cls: "f-route-soft" }, legend);
+S("text", { x: 88, y: 9, "font-size": 11, cls: "t-dim", text: "attention" }, legend);
+const cursor = S("rect", { x: TW.x - 4, y: TW.y0 - TW.h - 1, width: TW.w + 8, height: TW.h, rx: 3, fill: "none", stroke: "var(--act)", "stroke-width": 2.4, cls: "fade" }, svg);
+
+/* zoomed layer diagram */
+const Y = 150;
+const zoom = S("g", { cls: "fade" }, svg);
+S("path", { d: `M${TW.x + TW.w + 4},${TW.y0 - 12 * TW.h} L200,60 M${TW.x + TW.w + 4},${TW.y0 - 11 * TW.h} L200,252`, cls: "wire", "stroke-dasharray": "3 4" }, zoom);
+S("rect", { x: 200, y: 60, width: 740, height: 192, rx: 8, cls: "box-soft" }, zoom);
+const zlabel = S("text", { x: 214, y: 82, "font-size": 13, "font-weight": 600, text: "inside layer 11 (DeltaNet)" }, zoom);
+const inVals = vecFrom(11, 10);
+const sIn = strip(zoom, 214, Y - 9, inVals, 8, 18);
+S("text", { x: 214, y: Y + 26, "font-size": 11, cls: "t-dim", text: "h in" }, zoom);
+const B = {};
+function block(key, x, w, label, sub) {
+  const g = S("g", { cls: "fade" }, zoom);
+  B[key] = S("rect", { x, y: Y - 22, width: w, height: 44, rx: 7, cls: "box" }, g);
+  S("text", { x: x + w / 2, y: Y + 1, "text-anchor": "middle", "font-size": 13, "font-weight": 600, text: label }, g);
+  S("text", { x: x + w / 2, y: Y + 16, "text-anchor": "middle", "font-size": 10.5, cls: "t-dim", text: sub }, g);
+  return g;
+}
+function plus(key, x) { B[key] = S("circle", { cx: x, cy: Y, r: 12, cls: "box" }, zoom); S("text", { x, y: Y + 6, "text-anchor": "middle", "font-size": 18, text: "+" }, zoom); }
+S("path", { d: `M296,${Y} L960,${Y}`, cls: "wire" }, zoom).setAttribute("d", `M296,${Y} H316 M386,${Y} H404 M530,${Y} H548 M572,${Y} H590 M660,${Y} H678 M806,${Y} H824 M848,${Y} H860`);
+block("n1", 316, 70, "RMSNorm", "rescale");
+block("mix", 404, 126, "token mixer", "DeltaNet or attention");
+plus("p1", 560);
+block("n2", 590, 70, "RMSNorm", "rescale");
+block("moe", 678, 128, "feed-forward", "Mixture of Experts");
+plus("p2", 836);
+S("path", { d: `M300,${Y} V100 H560 V${Y - 12}`, cls: "wire-h", "stroke-dasharray": "5 4" }, zoom);
+S("path", { d: `M572,${Y} V100 H836 V${Y - 12}`, cls: "wire-h", "stroke-dasharray": "5 4" }, zoom);
+S("text", { x: 430, y: 95, "font-size": 11, cls: "t-h", text: "residual: h is copied around and added back" }, zoom);
+const outVals = inVals.slice();
+const sOut = strip(zoom, 864, Y - 9, outVals, 7, 18);
+S("text", { x: 864, y: Y + 26, "font-size": 11, cls: "t-dim", text: "h out" }, zoom);
+const packet = S("circle", { cx: 250, cy: Y, r: 6, cls: "f-act fade" }, zoom);
+
+/* insets in the lower area */
+const IN = { x: 200, y: 272, w: 740, h: 180 };
+function inset(title) {
+  const g = S("g", { cls: "fade hide" }, svg);
+  S("rect", { x: IN.x, y: IN.y, width: IN.w, height: IN.h, rx: 8, cls: "box" }, g);
+  S("text", { x: IN.x + 14, y: IN.y + 22, "font-size": 13, "font-weight": 600, text: title }, g);
+  return g;
+}
+const words = ["The", "capital", "of", "Australia"];
+// mixer inset: attention arcs (left) and DeltaNet memory (right)
+const mixI = inset("Token mixer: the only place tokens see each other");
+const tokPos = (k, x0) => x0 + k * 74;
+const arcs = [];
+[[230, "full attention: look at every earlier token"], [590, "Gated DeltaNet: update a fixed-size memory"]].forEach(([x0, cap], side) => {
+  S("text", { x: x0, y: IN.y + 48, "font-size": 11.5, cls: "t-dim", text: cap }, mixI);
+  words.forEach((w, k) => {
+    S("circle", { cx: tokPos(k, x0) + 20, cy: IN.y + 130, r: 16, cls: "f-h-soft" }, mixI);
+    S("text", { x: tokPos(k, x0) + 20, y: IN.y + 160, "text-anchor": "middle", "font-size": 11, cls: "t-mono t-dim", text: w }, mixI);
+  });
+  if (side === 0) {
+    for (let k = 0; k < 3; k++) {
+      const x1 = tokPos(3, x0) + 20, x2 = tokPos(k, x0) + 20;
+      arcs.push(S("path", { d: `M${x1},${IN.y + 114} Q${(x1 + x2) / 2},${IN.y + 60 + k * 8} ${x2},${IN.y + 114}`, cls: "wire-route fade" }, mixI));
+    }
+  } else {
+    const mem = S("rect", { x: x0 + 70, y: IN.y + 62, width: 120, height: 26, rx: 5, cls: "f-route-soft" }, mixI);
+    S("text", { x: x0 + 130, y: IN.y + 80, "text-anchor": "middle", "font-size": 11, cls: "t-route", text: "memory state" }, mixI);
+    words.forEach((w, k) => arcs.push(S("path", { d: `M${tokPos(k, x0) + 20},${IN.y + 114} L${x0 + 80 + k * 32},${IN.y + 90}`, cls: "wire-route fade" }, mixI)));
+    void mem;
+  }
+});
+// moe inset: tokens each go to their own experts
+const moeI = inset("Feed-forward: every token is processed on its own");
+const expRects = [];
+for (let e = 0; e < 24; e++) expRects.push(S("rect", { x: 470 + (e % 12) * 36, y: IN.y + 60 + Math.floor(e / 12) * 36, width: 30, height: 30, rx: 4, cls: "f-grid fade" }, moeI));
+words.forEach((w, k) => {
+  S("circle", { cx: 260 + k * 50, cy: IN.y + 110, r: 16, cls: "f-h-soft" }, moeI);
+  S("text", { x: 260 + k * 50, y: IN.y + 146, "text-anchor": "middle", "font-size": 11, cls: "t-mono t-dim", text: w }, moeI);
+});
+S("text", { x: 470, y: IN.y + 152, "font-size": 11.5, cls: "t-dim", text: "each token picks its own few experts (chapters 3 and 4)" }, moeI);
+// streaming inset
+const strI = inset("Streaming: one layer on the GPU at a time");
+S("rect", { x: 230, y: IN.y + 44, width: 170, height: 118, rx: 6, cls: "box-soft" }, strI);
+S("text", { x: 240, y: IN.y + 62, "font-size": 12, "font-weight": 600, text: "disk: 67 GiB model" }, strI);
+const slabs = [];
+for (let l = 0; l < 40; l++) slabs.push(S("rect", { x: 240 + (l % 10) * 15, y: IN.y + 72 + Math.floor(l / 10) * 20, width: 12, height: 16, rx: 2, cls: (isAttn(l) ? "f-route-soft" : "f-h-soft") + " fade" }, strI));
+S("rect", { x: 470, y: IN.y + 44, width: 180, height: 118, rx: 6, cls: "box-soft" }, strI);
+S("text", { x: 480, y: IN.y + 62, "font-size": 12, "font-weight": 600, text: "GPU: 16 GB" }, strI);
+const gpuSlab = S("rect", { x: 500, y: IN.y + 80, width: 120, height: 40, rx: 4, cls: "f-act-soft fade", stroke: "var(--act)" }, strI);
+const gpuText = S("text", { x: 560, y: IN.y + 105, "text-anchor": "middle", "font-size": 12, cls: "t-mono", text: "layer 0 · 1.7 GB" }, strI);
+S("text", { x: 480, y: IN.y + 148, "font-size": 11, cls: "t-dim", text: "next layer prefetched meanwhile" }, strI);
+S("rect", { x: 720, y: IN.y + 44, width: 196, height: 118, rx: 6, cls: "box-soft" }, strI);
+S("text", { x: 730, y: IN.y + 62, "font-size": 12, "font-weight": 600, text: "RAM: hidden states" }, strI);
+S("text", { x: 730, y: IN.y + 80, "font-size": 11, cls: "t-dim", text: "524k tokens x 2048 x 2 B = 2 GB" }, strI);
+for (let r = 0; r < 4; r++) strip(strI, 730, IN.y + 90 + r * 17, vecFrom(r + 40, 22), 8, 12);
+S("path", { d: `M400,${IN.y + 100} H470 M650,${IN.y + 100} H720`, cls: "wire-act" }, strI);
+// drift inset
+const drI = inset("Errors accumulate: drift");
+const DC = { x: 270, y: IN.y + 40, w: 600, h: 112 };
+S("path", { d: `M${DC.x},${DC.y} V${DC.y + DC.h} H${DC.x + DC.w}`, cls: "wire" }, drI);
+S("text", { x: DC.x + DC.w, y: DC.y + DC.h + 16, "text-anchor": "end", "font-size": 11, cls: "t-dim", text: "layer →" }, drI);
+S("text", { x: DC.x - 8, y: DC.y + 10, "text-anchor": "end", "font-size": 11, cls: "t-dim", text: "deviation" }, drI);
+const curveOne = S("path", { d: "", fill: "none", stroke: "var(--act)", "stroke-width": 2.2 }, drI);
+const curveAll = S("path", { d: "", fill: "none", stroke: "var(--cut)", "stroke-width": 2.2 }, drI);
+S("text", { x: DC.x + 10, y: DC.y + 14, "font-size": 11, cls: "t-act", text: "one damaged layer (3)" }, drI);
+S("text", { x: DC.x + 10, y: DC.y + 30, "font-size": 11, cls: "t-cut", text: "every layer slightly damaged (pruning)" }, drI);
+function driftSeries(start, every) {
+  const d = []; let v = 0;
+  for (let l = 0; l < 40; l++) { v *= 1.035; if (l === start) v += 0.25; if (every && l > start) v += 0.06; d.push(v); }
+  return d;
+}
+function curveD(series, max, box) {
+  return series.map((v, l) => `${l ? "L" : "M"}${box.x + (l / 39) * box.w},${box.y + box.h - (v / max) * box.h}`).join(" ");
+}
+
+/* animation helpers */
+let stopper = null;
+function stopAnim() { if (stopper) { stopper(); stopper = null; } }
+const PX = { in: 250, n1: 351, mix: 467, p1: 560, n2: 625, moe: 742, p2: 836, out: 900 };
+function movePacket(key) { animAttrs(packet, { cx: PX[key] }, 700); }
+function highlight(key) { Object.entries(B).forEach(([k, r]) => { r.style.stroke = k === key ? "var(--act)" : ""; r.style.strokeWidth = k === key ? 2.4 : ""; }); }
+function setLayer(l) {
+  cursor.setAttribute("y", TW.y0 - (l + 1) * TW.h - 1);
+  zlabel.textContent = `inside layer ${l} (${isAttn(l) ? "full attention" : "Gated DeltaNet"})`;
+}
+
+const steps = [
+  { title: "A stack of 40 layers", text: "The tower on the left is the whole model between the embedding table and lm_head. Blue layers use Gated DeltaNet, violet ones full attention: three of one, then one of the other, ten times." },
+  { title: "Zoom into one layer", text: "Every layer has the same shape. The hidden state h comes in on the left and leaves on the right." },
+  { title: "RMSNorm rescales the vector", text: "Before each half, the vector is rescaled to a standard size so numbers stay in a stable range through 40 layers." },
+  { title: "The token mixer lets tokens exchange information", text: "This is where \"Australia\" learns it follows \"capital of\". Attention looks at all earlier tokens directly; DeltaNet keeps a running memory that is cheaper for long texts.", ms: 6500 },
+  { title: "The residual connection adds, it does not replace", text: "The blue dashed line copies h around the mixer, and the mixer's output is added to it. A layer only writes a correction onto a shared notepad." },
+  { title: "Feed-forward: each token on its own", text: "The second half works on every token separately. In this model it is the Mixture of Experts, which holds 90% of the parameters. It also adds its result to h.", ms: 6000 },
+  { title: "Repeat for all 40 layers", text: "The output of layer 0 is the input of layer 1, and so on. After layer 39 the hidden state goes to lm_head.", ms: 6500 },
+  { title: "Why we can run 67 GiB on a 16 GB GPU", text: "Layer i only needs its own weights and the hidden states from layer i−1. moe_stream.py keeps all hidden states in RAM, loads one 1.7 GB layer onto the GPU, runs every token through it, frees it, and moves on.", ms: 7500 },
+  { title: "Why pruning errors pile up", text: "If pruning makes layer 3 write a slightly wrong correction, every later layer reads that wrong value and builds on it. Pruning every layer adds a little error at each step, and the deviation keeps growing.", ms: 7000 },
+];
+
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    stopAnim();
+    show(zoom, i >= 1);
+    show(cursor, i >= 1);
+    [mixI, moeI, strI, drI].forEach((g) => show(g, false));
+    tl.forEach((r) => (r.style.opacity = ""));
+    highlight(null);
+    sOut.set(inVals);
+    setLayer(11);
+    const keys = { 1: "in", 2: "n1", 3: "mix", 4: "p1", 5: "moe" };
+    if (keys[i]) movePacket(keys[i]);
+    if (i === 2) highlight("n1");
+    if (i === 3) {
+      highlight("mix"); show(mixI, true);
+      stopper = tween(5200, (t) => arcs.forEach((a, k) => (a.style.opacity = t * arcs.length > k ? 1 : 0.1)));
+    }
+    if (i === 4) { highlight("p1"); sOut.set(inVals.map((v, k) => clamp(v + (k % 3 === 0 ? 0.35 : -0.1), -1, 1))); }
+    if (i === 5) {
+      highlight("moe"); show(moeI, true);
+      const r = rng(5);
+      stopper = tween(5000, (t) => expRects.forEach((e) => e.classList.toggle("f-act", r() < 0.25 * t)));
+    }
+    if (i === 6) {
+      movePacket("out");
+      const v0 = vecFrom(11, 10), v1 = vecFrom(99, 10);
+      stopper = tween(5600, (t) => {
+        const l = Math.min(39, Math.floor(t * 40)); setLayer(l);
+        sOut.set(v0.map((v, k) => lerp(v, v1[k], t)));
+      });
+    }
+    if (i === 7) {
+      show(strI, true); movePacket("out");
+      stopper = tween(6800, (t) => {
+        const l = Math.min(39, Math.floor(t * 40)); setLayer(l);
+        slabs.forEach((s, k) => (s.style.opacity = k === l ? 0.25 : 1));
+        gpuText.textContent = `layer ${l} · 1.7 GB`;
+        gpuSlab.setAttribute("class", (isAttn(l) ? "f-route-soft" : "f-act-soft") + " fade");
+      });
+    }
+    if (i === 8) {
+      show(drI, true);
+      const one = driftSeries(3, false), all = driftSeries(3, true), max = Math.max(...all) * 1.05;
+      stopper = tween(3000, (t) => {
+        const n = Math.max(2, Math.ceil(t * 40));
+        curveOne.setAttribute("d", curveD(one.slice(0, n), max, DC));
+        curveAll.setAttribute("d", curveD(all.slice(0, n), max, DC));
+        setLayer(n - 1);
+      });
+    }
+  },
+});
+
+/* try it: drift chart */
+const ds = document.getElementById("drift-stage");
+const dsv = svgRoot(ds, 760, 230, "Deviation of the hidden state per layer");
+const box = { x: 60, y: 20, w: 670, h: 170 };
+S("path", { d: `M${box.x},${box.y} V${box.y + box.h} H${box.x + box.w}`, cls: "wire" }, dsv);
+for (let l = 0; l < 40; l += 5) S("text", { x: box.x + (l / 39) * box.w, y: box.y + box.h + 18, "text-anchor": "middle", "font-size": 11, cls: "t-faint t-mono", text: l }, dsv);
+S("text", { x: box.x + box.w, y: box.y + box.h + 34, "text-anchor": "end", "font-size": 11, cls: "t-dim", text: "layer" }, dsv);
+S("text", { x: box.x - 10, y: box.y + 8, "text-anchor": "end", "font-size": 11, cls: "t-dim", text: "dev." }, dsv);
+const area = S("path", { d: "", cls: "f-cut-soft" }, dsv);
+const line = S("path", { d: "", fill: "none", stroke: "var(--cut)", "stroke-width": 2.4 }, dsv);
+const marker = S("line", { y1: box.y, y2: box.y + box.h, stroke: "var(--act)", "stroke-width": 1.5, "stroke-dasharray": "4 3" }, dsv);
+function drawDrift() {
+  const L0 = +document.getElementById("errlayer").value, every = document.getElementById("everylayer").checked;
+  document.getElementById("errlayer-out").textContent = `layer ${L0}`;
+  const s = driftSeries(L0, every), max = Math.max(...driftSeries(0, true));
+  const d = curveD(s, max, box);
+  line.setAttribute("d", d);
+  area.setAttribute("d", `${d} L${box.x + box.w},${box.y + box.h} L${box.x},${box.y + box.h} Z`);
+  const mx = box.x + (L0 / 39) * box.w; marker.setAttribute("x1", mx); marker.setAttribute("x2", mx);
+}
+document.getElementById("errlayer").addEventListener("input", drawDrift);
+document.getElementById("everylayer").addEventListener("change", drawDrift);
+drawDrift();
+</script>
+</body>
+</html>

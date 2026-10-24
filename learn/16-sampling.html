@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sampling and Chat Templates</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+<style>
+  .tryit select, .tryit label { max-width: 100%; }
+  .draws { font: 0.9rem/1.6 var(--f-mono); margin-top: 8px; overflow-wrap: anywhere; }
+  .draws b { color: var(--act); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Chapter 16</div>
+    <h1>From probabilities to text: sampling and chat templates</h1>
+    <p class="lede">The model never writes text; it outputs a probability for each of 248,320 tokens. A sampler picks one,
+      it is appended, and the model runs again. This page uses the 19 B model's real probabilities to show what temperature,
+      top-k, top-p and min-p do, and how a chat, including "thinking", is turned into one text to continue.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="t16">
+    <h2 id="t16">Try it: build a sampler</h2>
+    <div class="row">
+      <label for="pr">prompt <select id="pr" class="btn"><option value="open">"… there lived a"</option><option value="factual">"The capital of Australia is"</option></select></label>
+      <label for="tt">temperature <input id="tt" type="range" min="0" max="2" step="0.05" value="1"></label>
+    </div>
+    <div class="row">
+      <label for="tk">top-k <input id="tk" type="range" min="0" max="12" step="1" value="0"></label>
+      <label for="tp">top-p <input id="tp" type="range" min="0.05" max="1" step="0.05" value="1"></label>
+      <label for="mp">min-p <input id="mp" type="range" min="0" max="0.5" step="0.01" value="0"></label>
+      <button class="btn primary" id="draw" type="button">Draw 20 tokens</button>
+    </div>
+    <div class="row"><span class="readout" id="s-out"></span></div>
+    <div class="stage" id="sm"></div>
+    <div class="draws" id="draws"></div>
+    <p class="note">Computed in your browser from the model's 12 most likely tokens (their real log-probabilities at
+      temperature 1, renormalised among themselves). The other 248,308 tokens are left out here; the animation above shows
+      measured values that include them. Temperature 0 means greedy: always the top token.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p><b>Temperature</b> divides the logits before the softmax: below 1 the leader pulls away, above 1 everything moves
+      towards equal. Because the vocabulary is huge, a high temperature hands a lot of probability to the long tail: at 1.5,
+      " Canberra" fell from 70% to 19%.</p>
+    <p><b>Filters cut the tail.</b> Top-k keeps a fixed number; top-p keeps the likeliest tokens up to a total probability;
+      min-p keeps tokens above a fraction of the top one. Top-p and min-p adapt: one candidate when the model is sure, several
+      when it is not. Qwen recommends temperature 1.0, top-p 0.95, top-k 20 and presence penalty 1.5 in thinking mode.</p>
+    <p><b>A chat is one text.</b> The template wraps each message in <code>&lt;|im_start|&gt;role … &lt;|im_end|&gt;</code>
+      and ends with <code>&lt;|im_start|&gt;assistant</code>; the model continues from there and stops by writing
+      <code>&lt;|im_end|&gt;</code>. "Thinking off" is the template pre-filling an empty <code>&lt;think&gt;&lt;/think&gt;</code>.</p>
+  </section>
+
+  <section class="facts" aria-label="Facts">
+    <div class="fact"><span class="k">Vocabulary</span><span class="v">248,320</span><span class="n">probabilities per step</span></div>
+    <div class="fact"><span class="k">" Canberra"</span><span class="v">69.6%</span><span class="n">98.7% at T=0.5, 19.2% at T=1.5</span></div>
+    <div class="fact"><span class="k">Qwen thinking mode</span><span class="v">T 1.0</span><span class="n">top-p 0.95, top-k 20, presence 1.5</span></div>
+    <div class="fact"><span class="k">Benchmarks here</span><span class="v">greedy</span><span class="n">T = 0: reproducible</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script src="theory-data.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const SA = TH.sampling, SM = SA.samplers;
+const vis = (t) => t.replace(/\n/g, "\\n").replace(/^ /, "␣");
+const W = 960, HH = 460;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "Sampling from the model's real probabilities");
+const G = Array.from({ length: 7 }, () => S("g", { cls: "fade hide" }, svg));
+const title = (g, t) => S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: t }, g);
+/* a column of probability bars; returns an update(list) function. list: [[token, p], ...] */
+function probBars(g, x, y, n, w, rowH = 30) {
+  const rows = Array.from({ length: n }, (_, k) => ({
+    lab: S("text", { x: x - 10, y: y + k * rowH + 16, "text-anchor": "end", "font-size": 12.5, cls: "t-mono", text: "" }, g),
+    bar: S("rect", { x, y: y + k * rowH + 3, width: 0, height: rowH - 10, rx: 3, cls: "f-h" }, g),
+    val: S("text", { x, y: y + k * rowH + 16, "font-size": 11.5, cls: "t-mono", text: "" }, g),
+  }));
+  return (list, cls) => rows.forEach((r, k) => {
+    const it = list[k];
+    r.lab.textContent = it ? vis(it[0]) : ""; r.val.textContent = it ? `${(it[1] * 100).toFixed(1)}%` : "";
+    r.bar.setAttribute("class", it && it[2] ? it[2] : cls || "f-h");
+    animAttrs(r.bar, { width: it ? Math.max(1, it[1] * w) : 0 }, 600);
+    r.val.setAttribute("x", x + (it ? it[1] * w : 0) + 8);
+  });
+}
+const fromLog = (top) => top.map(([t, lp]) => [t, Math.exp(lp)]);
+const withRest = (list, n) => { const s = list.reduce((a, b) => a + b[1], 0); return [...list.slice(0, n), [`all other ${(248320 - n).toLocaleString()}`, Math.max(0, 1 - list.slice(0, n).reduce((a, b) => a + b[1], 0)), "f-ink3"]]; };
+
+/* 0: logits to probabilities */
+const g0 = G[0];
+title(g0, 'after "The capital of Australia is": the 19 B model\'s probabilities for the next token');
+const up0 = probBars(g0, 260, 60, 9, 560);
+S("text", { x: 260, y: 350, "font-size": 12.5, cls: "t-dim", text: "One probability for each of the 248,320 tokens in the vocabulary; they add up to 100%." }, g0);
+S("text", { x: 260, y: 372, "font-size": 12.5, cls: "t-dim", text: "Measured with llama-server's n_probs (results/sampling_probs.json)." }, g0);
+
+/* 1: greedy, step by step */
+const g1 = G[1];
+title(g1, "greedy decoding: take the top token, append it, run the model again");
+const stepsF = SA.factual.steps;
+const gText = S("text", { x: 40, y: 80, "font-size": 18, cls: "t-mono", text: "" }, g1);
+const up1 = probBars(g1, 260, 120, 5, 520);
+const gNote = S("text", { x: 40, y: 300, "font-size": 12.5, cls: "t-dim", text: "" }, g1);
+S("text", { x: 40, y: 360, "font-size": 12.5, cls: "t-dim", text: "Without a chat template the model continues the text like a document: here, apparently, a quiz (\"A. True\")." }, g1);
+S("text", { x: 40, y: 382, "font-size": 12.5, cls: "t-dim", text: "Greedy is reproducible, which is why every benchmark here used it, but it can loop: run 1's repetition loops were greedy." }, g1);
+let gTimer = null;
+function playGreedy(i) {
+  clearInterval(gTimer);
+  if (i !== 1) return;
+  let k = 0;
+  const tick = () => {
+    const st = stepsF[k];
+    gText.textContent = SA.factual.prompt + stepsF.slice(0, k).map((s) => s.token).join("").replace(/\n/g, "↵");
+    up1(fromLog(st.top).slice(0, 5).map((it, j) => (j === 0 ? [...it, "f-act"] : it)));
+    gNote.textContent = `step ${k + 1}: the top token "${vis(st.token)}" is appended`;
+    k = (k + 1) % stepsF.length;
+  };
+  tick();
+  if (!REDUCED) gTimer = setInterval(tick, 1600);
+}
+
+/* 2, 3: temperature on both prompts (measured) */
+function tempStep(g, key, prompt) {
+  title(g, `temperature, measured: "${prompt}"`);
+  const lab = S("text", { x: 260, y: 64, "font-size": 16, "font-weight": 700, cls: "t-mono", text: "" }, g);
+  const up = probBars(g, 260, 80, 7, 560);
+  S("text", { x: 260, y: 380, "font-size": 12.5, cls: "t-dim", text: "p_i = e^(z_i / T) / Σ e^(z_j / T). Divide the logits z by T: T < 1 sharpens, T > 1 flattens. Real values from llama-server." }, g);
+  return (T) => { lab.textContent = `T = ${T}`; up(withRest(SM[key][`T=${T}`], 6)); };
+}
+const t2 = tempStep(G[2], "factual", "The capital of Australia is");
+const t3 = tempStep(G[3], "open", "Once upon a time, in a small village by the sea, there lived a");
+let tTimer = null;
+function playTemp(i) {
+  clearInterval(tTimer);
+  const f = i === 2 ? t2 : i === 3 ? t3 : null;
+  if (!f) return;
+  const Ts = ["1.0", "0.5", "1.0", "1.5"]; let k = 0;
+  f(Ts[0]);
+  if (!REDUCED) tTimer = setInterval(() => { k = (k + 1) % Ts.length; f(Ts[k]); }, 1800); else f("1.5");
+}
+
+/* 4: filters */
+const g4 = G[4];
+title(g4, "filters that cut the tail (temperature 1; kept tokens renormalised)");
+[["factual", "The capital of Australia is", 60], ["open", "… there lived a", 500]].forEach(([key, prompt, x]) => {
+  S("text", { x, y: 66, "font-size": 12.5, "font-weight": 600, text: `"${prompt}"` }, g4);
+  [["top-k = 3", "top_k=3"], ["top-p = 0.5", "top_p=0.5"], ["min-p = 0.2", "min_p=0.2"]].forEach(([n, s], r) => {
+    const y = 92 + r * 112;
+    S("text", { x, y, "font-size": 12, "font-weight": 600, cls: "t-dim", text: n }, g4);
+    SM[key][s].forEach(([t, p], j) => {
+      S("rect", { x: x + 90, y: y + 6 + j * 18, width: p * 240, height: 14, rx: 2, cls: "f-keep" }, g4);
+      S("text", { x: x + 86, y: y + 17 + j * 18, "text-anchor": "end", "font-size": 11, cls: "t-mono", text: vis(t) }, g4);
+      S("text", { x: x + 96 + p * 240, y: y + 17 + j * 18, "font-size": 10.5, cls: "t-mono t-dim", text: `${(p * 100).toFixed(0)}%` }, g4);
+    });
+  });
+});
+S("text", { x: 60, y: 440, "font-size": 12, cls: "t-dim", text: "Top-k keeps 3 even when the model is sure; top-p and min-p keep one candidate for the fact and five for the story." }, g4);
+
+/* 5: drawing */
+const g5 = G[5];
+title(g5, 'drawing at random: each token gets a slice as wide as its probability (story prompt, top-p 0.5)');
+const kept = SM.open["top_p=0.5"];
+let acc = 0;
+const segs = kept.map(([t, p], k) => { const x = 60 + acc * 840; acc += p; S("rect", { x, y: 80, width: p * 840 - 2, height: 50, rx: 3, cls: ["f-h", "f-keep", "f-route", "f-act", "f-cut"][k % 5], "fill-opacity": 0.8 }, g5); S("text", { x: x + (p * 840) / 2, y: 112, "text-anchor": "middle", "font-size": 13, cls: "t-mono", fill: "var(--paper)", text: `${vis(t)} ${(p * 100).toFixed(0)}%` }, g5); return [x, p * 840, t]; });
+const pointer = S("path", { d: "M0,0 L-8,-14 L8,-14 Z", cls: "f-cut" }, g5);
+const drawsT = S("text", { x: 60, y: 200, "font-size": 15, cls: "t-mono", text: "" }, g5);
+S("text", { x: 60, y: 250, "font-size": 12.5, cls: "t-dim", text: "A random number between 0 and 1 picks the slice it falls in. Over many draws, ' young' comes up about 39% of the time." }, g5);
+S("text", { x: 60, y: 272, "font-size": 12.5, cls: "t-dim", text: "The seed fixes the random numbers: same seed, same text." }, g5);
+let dTimer = null;
+function playDraw(i) {
+  clearInterval(dTimer);
+  if (i !== 5) return;
+  const r = rng(5), got = [];
+  const tick = () => {
+    const u = r(); let a = 0, pick = segs[segs.length - 1];
+    for (const sg of segs) { a += sg[1] / 840; if (u <= a) { pick = sg; break; } }
+    pointer.setAttribute("transform", `translate(${60 + u * 840 * (acc)},78)`);
+    got.push(vis(pick[2]).trim()); if (got.length > 12) got.shift();
+    drawsT.textContent = `draws: ${got.join(" · ")}`;
+  };
+  tick();
+  if (!REDUCED) dTimer = setInterval(tick, 700); else for (let k = 0; k < 11; k++) tick();
+}
+
+/* 6: chat template */
+const g6 = G[6];
+title(g6, "a chat is one text: the model's template (rendered by llama-server)");
+[["thinking on", SA.template_think_True, 40], ["thinking off", SA.template_think_False, 500]].forEach(([n, tpl, x]) => {
+  S("text", { x, y: 66, "font-size": 13, "font-weight": 600, text: n }, g6);
+  tpl.split("\n").forEach((line, k) => {
+    const t = S("text", { x, y: 96 + k * 24, "font-size": 13, cls: "t-mono" }, g6);
+    (line || " ").split(/(<\|im_start\|>|<\|im_end\|>|<\/?think>)/).filter(Boolean)
+      .forEach((part) => S("tspan", { cls: /^<.*>$/.test(part) ? "t-route" : null, text: part }, t)); // special tokens in violet
+  });
+});
+S("text", { x: 40, y: 330, "font-size": 12.5, cls: "t-dim", text: "Violet: special tokens. The model continues after the last line, and ends its turn by writing <|im_end|> (a stop token)." }, g6);
+S("text", { x: 40, y: 352, "font-size": 12.5, cls: "t-dim", text: "Thinking on: it first writes its reasoning, then </think> and the answer. Thinking off: the template writes an empty" }, g6);
+S("text", { x: 40, y: 374, "font-size": 12.5, cls: "t-dim", text: "<think></think> itself, so the model sees its reasoning is over. Not a switch in the network; just text." }, g6);
+
+const steps = [
+  { title: "Probabilities, not text", text: "After the prompt, the model gives every token in its 248,320-entry vocabulary a probability. ' Canberra' gets 69.6%; the rest is spread over alternatives, most of them plausible ways to continue a sentence.", ms: 7000 },
+  { title: "Greedy: always the top token", text: "Append the most likely token and run again. Deterministic, which is ideal for benchmarks, but without a chat template the model happily continues as if writing a quiz.", ms: 10000 },
+  { title: "Temperature on a fact", text: "At T = 0.5 ' Canberra' gets 98.7%; at 1.5 only 19.2%. No single wrong token became likely; the 248,000 unlikely ones each gained a little and together took 77%.", ms: 8000 },
+  { title: "Temperature on a story", text: "With many reasonable continuations the distribution is flat to begin with, and temperature decides how adventurous the story gets.", ms: 8000 },
+  { title: "Filters cut the tail", text: "Top-k keeps a fixed number of tokens. Top-p keeps the likeliest up to a total probability, min-p those above a fraction of the top one: one candidate for the fact, five for the story.", ms: 8000 },
+  { title: "Then draw at random", text: "Each kept token gets a slice of the line as wide as its probability, and a random number picks one. A fixed seed gives the same draws, and so the same text.", ms: 8000 },
+  { title: "Chat templates and thinking", text: "Messages are wrapped in special tokens and joined into one text that ends where the assistant's turn begins. Thinking off means the template has already written an empty think block.", ms: 9000 },
+];
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    G.forEach((g, k) => show(g, k === i));
+    if (i === 0) up0(withRest(fromLog(SA.factual.steps[0].top), 8));
+    playGreedy(i); playTemp(i); playDraw(i);
+  },
+});
+
+/* try it */
+const smSvg = svgRoot(document.getElementById("sm"), 960, 400, "Probabilities after the chosen sampler settings");
+const upT = probBars(smSvg, 200, 10, 12, 640, 32);
+let cur = [];
+function applySampler() {
+  const key = document.getElementById("pr").value, T = +document.getElementById("tt").value, k = +document.getElementById("tk").value, tp = +document.getElementById("tp").value, mp = +document.getElementById("mp").value;
+  const top = (key === "factual" ? SA.factual : SA.open).steps[0].top; // [token, logprob] at T=1
+  let list = top.map(([t, lp]) => [t, lp]);
+  if (T === 0) list = [[list[0][0], 0]];
+  else { const z = list.map((x) => x[1] / T); const m = Math.max(...z); const e = z.map((v) => Math.exp(v - m)); const s = e.reduce((a, b) => a + b, 0); list = list.map((x, j) => [x[0], e[j] / s]); }
+  if (T > 0) {
+    if (k > 0) list = list.slice(0, k);
+    if (tp < 1) { let a = 0; const keep = []; for (const x of list) { keep.push(x); a += x[1]; if (a >= tp) break; } list = keep; }
+    if (mp > 0) list = list.filter((x) => x[1] >= mp * list[0][1]);
+    const s = list.reduce((a, b) => a + b[1], 0); list = list.map((x) => [x[0], x[1] / s]);
+  } else list = [[list[0][0], 1]];
+  cur = list;
+  upT(list.map((x, j) => (j === 0 ? [...x, "f-act"] : x)));
+  document.getElementById("s-out").textContent = `${list.length} token${list.length > 1 ? "s" : ""} kept · top: "${vis(list[0][0])}" ${(list[0][1] * 100).toFixed(1)}%`;
+}
+const drawR = rng(42);
+document.getElementById("draw").addEventListener("click", () => {
+  const out = [];
+  for (let n = 0; n < 20; n++) { const u = drawR(); let a = 0; for (const x of cur) { a += x[1]; if (u <= a) { out.push(vis(x[0])); break; } } if (out.length <= n) out.push(vis(cur[cur.length - 1][0])); }
+  const box = clear(document.getElementById("draws"));
+  box.appendChild(document.createTextNode("20 draws: "));
+  out.forEach((t, k) => { H("b", { text: t.trim() }, box); if (k < 19) box.appendChild(document.createTextNode(" · ")); });
+});
+["pr", "tt", "tk", "tp", "mp"].forEach((id) => document.getElementById(id).addEventListener("input", applySampler));
+applySampler();
+</script>
+</body>
+</html>

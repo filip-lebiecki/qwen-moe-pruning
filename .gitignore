@@ -1,0 +1,10 @@
+# Whitelist: only the lessons, the scripts and the handoff notes are tracked.
+# Models, GGUFs, data, stats, results, logs, .venv and llama.cpp stay local
+# (rebuild with scripts/00_setup.sh, 01_download.sh and the numbered pipeline).
+/*
+!/.gitignore
+!/CLAUDE.md
+!/learn/
+!/scripts/
+__pycache__/
+*.pyc

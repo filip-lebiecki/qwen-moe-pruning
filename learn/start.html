@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Start Here</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+<style>
+  .tracks { display: grid; gap: 18px; margin: 24px 0; }
+  .track { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; }
+  .track h2 { margin: 0 0 4px; font-family: var(--f-display); font-size: var(--step-2); }
+  .track .why { margin: 0 0 10px; color: var(--ink2); }
+  .track ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+  .track li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: baseline; }
+  .track li input { margin: 0; accent-color: var(--keep); }
+  .track li a { font-weight: 600; }
+  .track li span.t { color: var(--ink3); font: 0.82rem var(--f-mono); white-space: nowrap; }
+  .track li .what { display: block; color: var(--ink2); font-size: 0.92rem; font-weight: 400; }
+  .track li.done a { color: var(--ink3); }
+  .progress { font: 600 0.9rem var(--f-mono); color: var(--keep); }
+  table.cheat { width: 100%; border-collapse: collapse; font-size: 0.93rem; }
+  table.cheat td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.cheat td:first-child { color: var(--ink2); width: 38%; }
+  table.cheat td.v { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs"><a href="index.html">Pruning Qwen3.5-35B-A3B</a><span>Start here</span><a href="README.html">Project notes</a></div>
+    <div class="eyebrow">Learning path</div>
+    <h1>Start here</h1>
+    <p class="lede">26 chapters and appendices plus the project notes is a lot. This is an order to read them in: six short tracks, each building on the one before.
+      Every chapter ends with a few "Check yourself" questions; answer them before opening the answers. Tick a page when you
+      are done; the ticks are kept in this browser only. <span class="progress" id="prog"></span></p>
+  </header>
+
+  <div class="tracks" id="tracks"></div>
+
+  <section class="prose">
+    <h2>Cheat sheet: the numbers to remember</h2>
+    <p>Each one is measured in this project; the link goes to where it is explained.</p>
+    <div class="tablewrap"><table class="cheat" id="cheat"></table></div>
+  </section>
+
+  <section class="prose">
+    <h2>How to study with these pages</h2>
+    <p><b>One chapter at a time.</b> Watch the animation with Play, then step back through it with the arrow keys; then use
+      the "Try it" panel to change one thing and predict the result before you look.</p>
+    <p><b>Answer before you open.</b> The questions at the end of each page are short on purpose; if you cannot answer one,
+      reread that part of the page or its README section, not the answer.</p>
+    <p><b>Run one thing yourself.</b> The fastest way to make it stick is to run a command from the notes:
+      <code>scripts/make_gguf.sh Qwen/Qwen3.5-2B Q4_K_M</code> takes about 4 minutes and touches download, conversion,
+      the imatrix, quantization and perplexity.</p>
+  </section>
+
+  <nav class="pager"><a href="index.html"><span>Back</span>All chapters</a><a class="next" href="01-tokens.html"><span>First</span>Tokens and hidden states</a></nav>
+</div>
+
+<script src="common.js"></script>
+<script>
+"use strict";
+const TRACKS = [
+  ["1 · How the model works", "What happens to a token on its way through Qwen3.5-35B-A3B, from text to the next word.", [
+    ["01-tokens.html", 10, "Tokens, embeddings, and how the last hidden state becomes probabilities"],
+    ["02-layers.html", 10, "40 layers, the residual stream, and running a model one layer at a time"],
+    ["03-experts.html", 10, "256 experts per layer, 8 per token: 35 B stored, 3 B active"],
+    ["04-router.html", 10, "Scores, softmax, top-8, renormalize: how experts are chosen"],
+    ["13-attention.html", 15, "How tokens exchange information, and what context costs in memory"],
+    ["16-sampling.html", 10, "From probabilities to text: temperature, top-p, chat templates, thinking"]]],
+  ["2 · Shrinking it by deleting experts", "The main project: which experts to delete, and how to tell how much it hurt.", [
+    ["05-pruning.html", 10, "What pruning experts physically does, and what each K costs"],
+    ["06-reap.html", 10, "Choosing experts: frequency against REAP"],
+    ["07-calibration.html", 10, "Why the text you measure on decides what survives"],
+    ["08-perplexity.html", 10, "Measuring damage with perplexity"],
+    ["b-answers.html", 10, "What perplexity 11.7 and 5.9 look like as real answers"],
+    ["d-specialist.html", 15, "The same 9 B budget spent on code only"],
+    ["a-options.html", 10, "Other ways to shrink a model, and why this project deleted experts"]]],
+  ["3 · Measuring honestly", "Perplexity is not enough: benchmarks, and testing whether a pattern is a cause.", [
+    ["e-benchmark.html", 15, "GSM8K, HumanEval and MMLU, grading, and confidence intervals"],
+    ["g-experts.html", 15, "What each expert receives: an explorer of all 10,240"],
+    ["i-ablation.html", 15, "Deleting experts and teams to test specialisation; merging against deleting"]]],
+  ["4 · Bits and speed", "Quantization from the bits up, and what decides how fast a model runs.", [
+    ["14-numbers.html", 10, "FP32, FP16 and BF16 bit by bit, and why addition order matters"],
+    ["10-quantization.html", 10, "Blocks, scales and 16 levels: Q4_K_M and IQ4_XS"],
+    ["11-imatrix.html", 10, "The importance matrix: where quantization spends its precision"],
+    ["h-quant.html", 15, "The quantization curve from 8 bits to 2, and the 35 B against the 19 B"],
+    ["15-speed.html", 15, "Memory bandwidth, batching, offloading and speculative decoding"]]],
+  ["5 · Training", "Teaching the pruned model with the original as its teacher.", [
+    ["09-distillation.html", 10, "Teacher, student, KL divergence, and why local healing failed"],
+    ["f-training.html", 15, "One training step, gradients, and backpropagation through a model that does not fit"]]],
+  ["6 · Doing it yourself", "The commands, the code, and the bugs, so you can repeat it on another model.", [
+    ["j-practical.html", 15, "Download, convert, quantize, check, run and publish any model"],
+    ["12-pipeline.html", 10, "Every script in order, the disk it needs, and the glossary"],
+    ["c-code.html", 15, "A tour of the code and the four bugs that cost the most time"]]],
+];
+const titleOf = Object.fromEntries(CHAPTERS.map(([f, t], k) => [f, `${chapterLabel(k)}: ${t}`]));
+const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private window: no memory */ } } };
+const box = document.getElementById("tracks");
+let total = 0;
+TRACKS.forEach(([name, why, items]) => {
+  const sec = H("section", { cls: "track" }, box);
+  const mins = items.reduce((s, it) => s + it[1], 0);
+  H("h2", { text: `${name}` }, sec);
+  H("p", { cls: "why", text: `${why} About ${mins} minutes.` }, sec);
+  const ol = H("ol", {}, sec);
+  items.forEach(([f, m, what]) => {
+    total++;
+    const li = H("li", {}, ol);
+    const cb = H("input", { type: "checkbox", "aria-label": `done: ${titleOf[f] || f}` }, li);
+    const cell = H("div", {}, li);
+    H("a", { href: f, text: titleOf[f] || f }, cell);
+    H("span", { cls: "what", text: what }, cell);
+    H("span", { cls: "t", text: `${m} min` }, li);
+    cb.checked = store.get(`done:${f}`) === "1";
+    li.classList.toggle("done", cb.checked);
+    cb.addEventListener("change", () => { store.set(`done:${f}`, cb.checked ? "1" : "0"); li.classList.toggle("done", cb.checked); prog(); });
+  });
+});
+function prog() { const n = [...document.querySelectorAll(".track input")].filter((c) => c.checked).length; document.getElementById("prog").textContent = n ? `${n} of ${total} done.` : ""; }
+prog();
+
+const CHEAT = [
+  ["The model", "35 B parameters, about 3 B used per token; 40 layers of 256 experts, 8 chosen per token", "03-experts.html"],
+  ["Where the parameters are", "routed experts 32.2 B (about 90%)", "03-experts.html"],
+  ["Context memory", "KV cache 20 KiB per token (5 GiB at 262k); DeltaNet state 63 MiB at any length", "13-attention.html"],
+  ["Pruning to 128 experts per layer", "19 B, perplexity 4.92 → 5.92; to 48: 8.9 B, 11.7 (broken)", "05-pruning.html"],
+  ["Choosing experts (K = 128)", "REAP 5.92, frequency 6.47, random 7.93", "06-reap.html"],
+  ["Benchmarks, GSM8K / HumanEval / MMLU", "original 96.4 / 95.7 / 86.7; 19 B prune 95.6 / 79.9 / 73.7; 8.9 B code prune 74.8 / 87.2 / 39.0", "e-benchmark.html"],
+  ["Router distillation", "KL to the teacher −18%, benchmarks unchanged", "f-training.html"],
+  ["Quantizing the 19 B", "no measurable loss down to Q3_K_M (3.9 bits); 2 bits collapse", "h-quant.html"],
+  ["Same file size, 10.6 GiB", "35 B at 2.6 bits: average 91.4; pruned 19 B at 4.9 bits: 82.7", "h-quant.html"],
+  ["Best file for 16 GB measured", "35 B UD-IQ3_XXS, 12.2 GiB, 173 tokens/s, average 92.2", "h-quant.html"],
+  ["Speed", "19 B Q4_K_M reads 1.80 GiB per token: ceiling 463 tokens/s, measured 212", "15-speed.html"],
+  ["Deleting experts as a test", "one expert: under 1% anywhere; a topic team of 4 per layer: that topic +25–51%", "i-ablation.html"],
+  ["Merging instead of deleting", "K = 128: deleting 5.92, merging 7.3–7.9", "i-ablation.html"],
+  ["A MoE bigger than the GPU", "35 B Q4_K_M with 12 layers' experts in RAM: 78 tokens/s", "j-practical.html"],
+  ["Speculative decoding", "the 2 B's own MTP head: math and edits +45%, prose +0%", "15-speed.html"],
+];
+const ct = document.getElementById("cheat");
+CHEAT.forEach(([k, v, f]) => { const tr = H("tr", {}, ct); H("td", { text: k }, tr); const td = H("td", { cls: "v" }, tr); H("a", { href: f, text: v }, td); });
+</script>
+</body>
+</html>

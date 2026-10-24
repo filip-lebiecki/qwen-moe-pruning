@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The MoE Router</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Chapter 4</div>
+    <h1>The router</h1>
+    <p class="lede">Each MoE layer has a router: one small 256 x 2048 matrix that scores every expert for the current token.
+      Five steps turn those scores into the 8 experts the token uses and the weights their outputs get.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="try4">
+    <h2 id="try4">Try it: what load balancing does</h2>
+    <div class="row">
+      <label for="skew">Routing imbalance <input id="skew" type="range" min="0" max="100" value="26"></label>
+      <span class="readout" id="skew-out"></span>
+      <button class="btn" id="qwen" type="button">Set to Qwen's measured value</button>
+    </div>
+    <div class="stage" id="lb-stage"></div>
+    <p class="note">Bars: share of routed tokens per expert in one layer, sorted from most to least used. In our statistics
+      the 128 most-used experts of a layer received 73.7% of the traffic on average. Low imbalance means no expert is useless,
+      so pruning has no free lunch. High imbalance (what a model without a load-balancing loss tends to do) would leave
+      many rarely used experts that could be dropped almost for free.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p>The router computes <code>logits = W · x</code> (one score per expert), then <code>softmax</code>, keeps the
+      <b>top 8</b>, and <b>renormalizes</b> those 8 so they sum to 1. Those are the routing weights <i>g</i>. The layer's
+      output is <code>Σ g_j · E_j(x) + shared(x)</code>.</p>
+    <p>Row <i>j</i> of the router matrix acts as a description of the tokens expert <i>j</i> is good at. When an
+      expert is pruned, its row is deleted too, and the top 8 are picked among the survivors (chapter 5).</p>
+  </section>
+
+  <section class="facts" aria-label="In this project">
+    <div class="fact"><span class="k">About the example</span><span class="v">made-up numbers</span><span class="n">experts and probabilities are illustrative</span></div>
+    <div class="fact"><span class="k">Router matrix</span><span class="v">256 x 2048</span><span class="n"><code>mlp.gate.weight</code>, 0.5 M params</span></div>
+    <div class="fact"><span class="k">Top-k</span><span class="v">8</span><span class="n">renormalized to sum 1</span></div>
+    <div class="fact"><span class="k">Dead experts</span><span class="v">0 of 10,240</span><span class="n">every expert was used in our 524k tokens</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">moe_forward()</span><span class="n">lines: logits, softmax, topk, renormalize</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const W = 960, HH = 480;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "The router scores 256 experts, keeps the top 8 and mixes their outputs");
+const TOP = [[203, 0.09], [17, 0.07], [88, 0.05], [150, 0.045], [4, 0.04], [231, 0.04], [61, 0.035], [119, 0.03]];
+
+function makeProbs(seed) {
+  const p = new Array(256).fill(0);
+  if (seed === 0) {
+    TOP.forEach(([e, v]) => (p[e] = v));
+    const r = rng(42), rest = [];
+    for (let e = 0; e < 256; e++) if (!p[e]) rest.push([e, Math.pow(r(), 2.2)]);
+    const s = rest.reduce((a, [, v]) => a + v, 0);
+    rest.forEach(([e, v]) => (p[e] = Math.min(0.028, (v / s) * 0.6)));
+    const s2 = p.reduce((a, b) => a + b, 0); // fix sum to exactly 1 by scaling the rest
+    const restSum = s2 - 0.4; rest.forEach(([e]) => (p[e] *= 0.6 / restSum));
+    return p;
+  }
+  const r = rng(seed * 31 + 7);
+  const lg = Array.from({ length: 256 }, () => gauss(r) * 1.1);
+  for (let k = 0; k < 6; k++) lg[Math.floor(r() * 256)] += 1.5 + r();
+  return softmax(lg);
+}
+let probs = makeProbs(0), seedNo = 0;
+
+/* hidden state x */
+const xg = S("g", { cls: "fade" }, svg);
+S("text", { x: 22, y: 44, "font-size": 13, "font-weight": 600, text: "x" }, xg);
+S("text", { x: 22, y: 60, "font-size": 10.5, cls: "t-dim", text: "2048" }, xg);
+const xv = vecFrom(8071, 22);
+xv.forEach((v, k) => { const r = S("rect", { x: 22, y: 70 + k * 14, width: 18, height: 12, rx: 2 }, xg); paintCell(r, v); });
+
+/* router matrix */
+const M = { x: 70, y: 70, w: 110, h: 308 };
+const mg = S("g", { cls: "fade" }, svg);
+S("text", { x: M.x, y: 44, "font-size": 13, "font-weight": 600, text: "router W" }, mg);
+S("text", { x: M.x, y: 60, "font-size": 10.5, cls: "t-dim t-mono", text: "[256 x 2048]" }, mg);
+S("rect", { x: M.x, y: M.y, width: M.w, height: M.h, rx: 3, cls: "f-route-soft" }, mg);
+for (let k = 0; k < 64; k++) S("rect", { x: M.x + 3, y: M.y + 2 + k * 4.8, width: M.w - 6, height: 1.4, cls: "f-route", opacity: 0.18 }, mg);
+const row17 = S("rect", { x: M.x - 2, y: M.y + (17 / 256) * M.h, width: M.w + 4, height: 4, rx: 1, cls: "f-route fade hide" }, mg);
+const row17t = S("text", { x: M.x + M.w + 6, y: M.y + (17 / 256) * M.h + 5, "font-size": 10, cls: "t-route fade hide", text: "row 17" }, svg);
+S("text", { x: 52, y: 230, "text-anchor": "middle", "font-size": 16, cls: "t-dim", text: "·" }, mg);
+
+/* bar chart of 256 experts */
+const C = { x: 214, y: 70, w: 500, h: 300 };
+const chart = S("g", { cls: "fade" }, svg);
+S("path", { d: `M${C.x},${C.y + C.h} H${C.x + C.w}`, cls: "wire" }, chart);
+const chartTitle = S("text", { x: C.x, y: 44, "font-size": 13, "font-weight": 600, text: "256 scores (logits)" }, chart);
+const chartSub = S("text", { x: C.x, y: 60, "font-size": 10.5, cls: "t-dim", text: "one per expert, expert 0 on the left" }, chart);
+const bw = C.w / 256;
+const bars = Array.from({ length: 256 }, (_, e) => S("rect", { x: C.x + e * bw, y: C.y + C.h, width: Math.max(bw - 0.4, 1), height: 0, cls: "f-h fade" }, chart));
+const topLabels = TOP.map(() => S("text", { x: 0, y: 0, "text-anchor": "middle", "font-size": 10, cls: "t-mono t-act fade hide", text: "" }, chart));
+const sumLabel = S("text", { x: C.x + C.w, y: 60, "text-anchor": "end", "font-size": 11.5, cls: "t-mono t-h fade hide", text: "sum = 1.000" }, chart);
+for (const e of [0, 64, 128, 192, 255]) S("text", { x: C.x + e * bw, y: C.y + C.h + 14, "text-anchor": "middle", "font-size": 9.5, cls: "t-faint t-mono", text: e }, chart);
+
+/* right panel: table + mix */
+const T = { x: 740, y: 70 };
+const tab = S("g", { cls: "fade hide" }, svg);
+S("text", { x: T.x, y: 44, "font-size": 13, "font-weight": 600, text: "top 8" }, tab);
+["expert", "p", "g = p / Σ"].forEach((h, k) => S("text", { x: T.x + [0, 62, 130][k], y: T.y, "font-size": 10.5, cls: "t-faint t-mono", text: h }, tab));
+const rows = TOP.map((_, k) => {
+  const y = T.y + 22 + k * 24;
+  return {
+    e: S("text", { x: T.x, y, "font-size": 13, cls: "t-mono", text: "" }, tab),
+    p: S("text", { x: T.x + 62, y, "font-size": 13, cls: "t-mono t-dim", text: "" }, tab),
+    g: S("text", { x: T.x + 130, y, "font-size": 13, cls: "t-mono t-act", "font-weight": 600, text: "" }, tab),
+  };
+});
+const sumRow = S("text", { x: T.x, y: T.y + 22 + 8 * 24 + 4, "font-size": 11.5, cls: "t-mono t-dim", text: "" }, tab);
+
+const mix = S("g", { cls: "fade hide" }, svg);
+S("text", { x: C.x, y: 410, "font-size": 13, "font-weight": 600, text: "output = Σ g · E(x) + shared(x)" }, mix);
+const mixStrips = TOP.map((_, k) => strip(mix, C.x + k * 62, 424, vecFrom(500 + k, 6), 9, 14));
+S("text", { x: C.x + 8 * 62, y: 436, "font-size": 16, text: "+" }, mix);
+strip(mix, C.x + 8 * 62 + 18, 424, vecFrom(999, 6), 9, 14);
+S("text", { x: C.x + 8 * 62 + 18, y: 454, "font-size": 9.5, cls: "t-faint", text: "shared" }, mix);
+S("text", { x: C.x + 9 * 62 + 26, y: 436, "font-size": 16, text: "=" }, mix);
+const outStrip = strip(mix, C.x + 9 * 62 + 44, 424, vecFrom(1, 6), 9, 14);
+const mixLabels = TOP.map((_, k) => S("text", { x: C.x + k * 62, y: 454, "font-size": 9.5, cls: "t-mono t-act", text: "" }, mix));
+const skipped = S("text", { x: W / 2, y: HH - 6, "text-anchor": "middle", "font-size": 12.5, cls: "t-dim fade hide", text: "the other 248 experts are not computed at all for this token" }, svg);
+
+function topOf(p, k = 8) { return p.map((v, e) => [e, v]).sort((a, b) => b[1] - a[1]).slice(0, k); }
+const maxLogitSpan = () => { const lg = probs.map((v) => Math.log(v)); return [Math.min(...lg), Math.max(...lg)]; };
+function drawBars(mode, highlightTop) {
+  const top = new Set(topOf(probs).map(([e]) => e));
+  const [lo, hi] = maxLogitSpan();
+  const pmax = Math.max(...probs);
+  bars.forEach((b, e) => {
+    let h = 0;
+    if (mode === "logit") h = ((Math.log(probs[e]) - lo) / (hi - lo)) * C.h * 0.9 + 4;
+    if (mode === "prob") h = (probs[e] / pmax) * C.h * 0.9;
+    animAttrs(b, { height: h, y: C.y + C.h - h }, 700);
+    b.setAttribute("class", (highlightTop ? (top.has(e) ? "f-act" : "f-line") : "f-h") + " fade");
+  });
+}
+function placeTopLabels(on) {
+  const top = topOf(probs), pmax = Math.max(...probs);
+  topLabels.forEach((t, k) => {
+    const [e, v] = top[k];
+    t.setAttribute("x", C.x + e * bw + bw / 2);
+    t.setAttribute("y", C.y + C.h - (v / pmax) * C.h * 0.9 - 6 - (k % 2) * 11);
+    t.textContent = e; show(t, on);
+  });
+}
+function fillTable(renorm) {
+  const top = topOf(probs), s = top.reduce((a, [, v]) => a + v, 0);
+  top.forEach(([e, v], k) => {
+    rows[k].e.textContent = e; rows[k].p.textContent = v.toFixed(3);
+    rows[k].g.textContent = renorm ? (v / s).toFixed(3) : "";
+    mixLabels[k].textContent = `${(v / s).toFixed(2)}·E${e}`;
+  });
+  sumRow.textContent = renorm ? `Σp = ${s.toFixed(2)}  →  Σg = 1.00` : `Σp = ${s.toFixed(2)} (the other 248 share ${(1 - s).toFixed(2)})`;
+  const g = top.map(([, v]) => v / s);
+  mixStrips.forEach((st, k) => st.cells.forEach((c) => (c.style.fillOpacity = (0.15 + 0.85 * clamp(g[k] * 3, 0, 1)).toFixed(2))));
+}
+
+let sweepStop = null;
+const steps = [
+  { title: "A token's hidden state arrives", text: "This is x, the 2048-number hidden state of \"␣Australia\" at the input of one MoE layer (after RMSNorm). The routing numbers in this walkthrough are a made-up example, the same one as in the README." },
+  { title: "1. Score: multiply by the router matrix", text: "Each of the 256 rows of W is multiplied with x, giving one score (logit) per expert. Row 17 is in effect a description of the tokens expert 17 is good at.", ms: 6000 },
+  { title: "2. Softmax turns scores into probabilities", text: "Bigger scores get exponentially bigger shares. All 256 probabilities add up to exactly 1." },
+  { title: "3. Keep the top 8", text: "Only the 8 highest survive: experts 203, 17, 88, 150, 4, 231, 61 and 119. Together they had 0.40 of the probability." },
+  { title: "4. Renormalize so the 8 weights sum to 1", text: "Each of the 8 is divided by 0.40. Expert 203 goes from 0.090 to 0.225. These are the routing weights g." },
+  { title: "5. Mix the 8 expert outputs", text: "Run x through the 8 chosen experts, multiply each output by its weight g, add them up, and add the shared expert's output." },
+  { title: "248 experts did no work for this token", text: "That is the saving of MoE. Over many tokens, every expert gets its turn, because Qwen was trained with a load-balancing loss (try it below)." },
+];
+
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    if (sweepStop) { sweepStop(); sweepStop = null; }
+    show(row17, i === 1); show(row17t, i === 1);
+    show(tab, i >= 3); show(mix, i >= 5); show(sumLabel, i === 2); show(skipped, i === 6);
+    chartTitle.textContent = i <= 1 ? "256 scores (logits)" : "256 probabilities after softmax";
+    chartSub.textContent = i >= 3 ? "amber: the top 8" : "one per expert, expert 0 on the left";
+    if (i === 0) { bars.forEach((b) => animAttrs(b, { height: 0, y: C.y + C.h }, 300)); placeTopLabels(false); }
+    if (i === 1) {
+      placeTopLabels(false);
+      bars.forEach((b) => { b.setAttribute("height", 0); b.setAttribute("y", C.y + C.h); b.setAttribute("class", "f-h fade"); });
+      const [lo, hi] = maxLogitSpan();
+      sweepStop = tween(2600, (t) => {
+        const n = Math.floor(t * 256);
+        for (let e = 0; e < n; e++) {
+          const h = ((Math.log(probs[e]) - lo) / (hi - lo)) * C.h * 0.9 + 4;
+          bars[e].setAttribute("height", h); bars[e].setAttribute("y", C.y + C.h - h);
+        }
+        row17.setAttribute("y", M.y + (Math.min(n, 255) / 256) * M.h);
+        row17t.setAttribute("y", M.y + (Math.min(n, 255) / 256) * M.h + 5);
+        row17t.textContent = `row ${Math.min(n, 255)}`;
+      });
+    }
+    if (i === 2) { drawBars("prob", false); placeTopLabels(false); }
+    if (i >= 3) { drawBars("prob", true); placeTopLabels(true); fillTable(i >= 4); }
+    if (i === 6) bars.forEach((b, e) => { if (!topOf(probs).some(([t]) => t === e)) b.style.opacity = 0.35; });
+    else bars.forEach((b) => (b.style.opacity = ""));
+  },
+});
+
+/* try it: load balancing */
+const lb = document.getElementById("lb-stage");
+const lsv = svgRoot(lb, 760, 220, "Expert usage in one layer, sorted");
+const LB = { x: 40, y: 16, w: 690, h: 160 };
+S("path", { d: `M${LB.x},${LB.y + LB.h} H${LB.x + LB.w}`, cls: "wire" }, lsv);
+const half = S("line", { x1: LB.x + LB.w / 2, x2: LB.x + LB.w / 2, y1: LB.y, y2: LB.y + LB.h, stroke: "var(--ink3)", "stroke-dasharray": "4 3" }, lsv);
+S("text", { x: LB.x + LB.w / 2 + 6, y: LB.y + 12, "font-size": 11, cls: "t-dim", text: "← top 128 | bottom 128 →" }, lsv);
+S("text", { x: LB.x, y: LB.y + LB.h + 18, "font-size": 11, cls: "t-faint", text: "most used expert" }, lsv);
+S("text", { x: LB.x + LB.w, y: LB.y + LB.h + 18, "text-anchor": "end", "font-size": 11, cls: "t-faint", text: "least used expert" }, lsv);
+const ubars = Array.from({ length: 256 }, (_, k) => S("rect", { x: LB.x + k * (LB.w / 256), y: LB.y + LB.h, width: LB.w / 256 - 0.3, height: 0, cls: k < 128 ? "f-keep" : "f-cut" }, lsv));
+const zs = (() => { const r = rng(7); return Array.from({ length: 256 }, () => gauss(r)).sort((a, b) => b - a); })();
+function usage(sig) { const u = zs.map((z) => Math.exp(sig * z)); const s = u.reduce((a, b) => a + b, 0); return u.map((v) => v / s); }
+function topShare(sig) { return usage(sig).slice(0, 128).reduce((a, b) => a + b, 0); }
+function sigFor(target) { let lo = 0, hi = 4; for (let k = 0; k < 40; k++) { const m = (lo + hi) / 2; topShare(m) < target ? (lo = m) : (hi = m); } return (lo + hi) / 2; }
+const SIG_QWEN = sigFor(0.737);
+function drawLB() {
+  const v = +document.getElementById("skew").value, sig = (v / 100) * 3;
+  const u = usage(sig), mx = Math.max(...u);
+  ubars.forEach((b, k) => { const h = (u[k] / mx) * LB.h; b.setAttribute("height", h); b.setAttribute("y", LB.y + LB.h - h); });
+  const share = u.slice(0, 128).reduce((a, b) => a + b, 0);
+  document.getElementById("skew-out").textContent = `top 128 experts get ${(share * 100).toFixed(1)}% of tokens`;
+}
+document.getElementById("skew").addEventListener("input", drawLB);
+document.getElementById("qwen").addEventListener("click", () => { document.getElementById("skew").value = Math.round((SIG_QWEN / 3) * 100); drawLB(); });
+document.getElementById("skew").value = Math.round((SIG_QWEN / 3) * 100);
+drawLB();
+</script>
+</body>
+</html>

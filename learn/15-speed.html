@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>What Sets the Speed</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+<style>.tryit select, .tryit label { max-width: 100%; } .tryit label { flex-wrap: wrap; }</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Chapter 15</div>
+    <h1>What sets the speed</h1>
+    <p class="lede">Reading a prompt and writing an answer are different jobs for a GPU. Reading is limited by arithmetic;
+      writing, one token at a time, is limited by how fast the weights can be fetched from memory. That makes generation
+      speed something you can estimate with a calculator, and explains why a MoE is fast, why spilling out of VRAM is a cliff,
+      and what serving several users at once buys.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="t15">
+    <h2 id="t15">Try it: estimate the speed of any model on any hardware</h2>
+    <div class="row">
+      <label for="hw">memory <select id="hw" class="btn">
+        <option value="896">RTX 5070 Ti, 896 GB/s</option><option value="1008">RTX 4090, 1008 GB/s</option>
+        <option value="1792">RTX 5090, 1792 GB/s</option><option value="360">RTX 3060 12 GB, 360 GB/s</option>
+        <option value="273">Apple M4 Pro, 273 GB/s</option><option value="51">dual-channel DDR4-3200 (CPU), 51 GB/s</option>
+        <option value="32">PCIe 4.0 x16 (spilled weights), 32 GB/s</option></select></label>
+      <label for="act">active parameters (B) <input id="act" type="range" min="1" max="70" step="0.5" value="3.4"></label>
+      <label for="bpw">bits per weight <input id="bpw" type="range" min="2" max="16" step="0.1" value="4.9"></label>
+      <span class="readout" id="sp-out"></span>
+    </div>
+    <div class="stage" id="sp"></div>
+    <p class="note">Ceiling = bandwidth ÷ (active parameters x bits ÷ 8). Real runs reach roughly 40–70% of it; this
+      project's 19 B Q4_K_M reached 46% (212 of 463 tokens per second). It ignores the KV cache, which also has to be read
+      for every token and matters at long contexts.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p><b>Prefill is compute-bound, decode is memory-bound.</b> A prompt of 1,621 tokens was read in 0.29 s; 256 new tokens
+      took 1.20 s. When generating, the GPU waits for weights, not for arithmetic.</p>
+    <p><b>Tokens per second ≤ memory bandwidth ÷ bytes read per token.</b> The 19 B Q4_K_M reads 1.80 GiB per token: the
+      routed experts are 86% of the file but only 32% of what one token touches, which is why a MoE with 3 B active parameters
+      runs like a 3 B model while knowing like a much bigger one.</p>
+    <p><b>Spilling is a cliff, batching is a slope.</b> Weights read over PCIe come about 28x slower than from VRAM.
+      Several requests at once share each weight read, so total throughput rises (182 → 488 tokens per second at 16), but a
+      MoE gains less than a dense model because each request wants its own experts.</p>
+  </section>
+
+  <section class="facts" aria-label="Facts">
+    <div class="fact"><span class="k">Read per token</span><span class="v">1.80 GiB</span><span class="n">of a 10.58 GiB file</span></div>
+    <div class="fact"><span class="k">Ceiling</span><span class="v">463 tok/s</span><span class="n">at 896 GB/s; measured 212</span></div>
+    <div class="fact"><span class="k">Prefill</span><span class="v">5,527 tok/s</span><span class="n">1,621-token prompt in 0.29 s</span></div>
+    <div class="fact"><span class="k">16 at once</span><span class="v">488 tok/s</span><span class="n">31 per request</span></div>
+    <div class="fact"><span class="k">MTP drafting (2 B)</span><span class="v">+45%</span><span class="n">math and edits; prose +0%</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script src="theory-data.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const RD = TH.read, BW = TH.gpu.bandwidth_gbs;
+const SP = TH.speed, BS = TH.batch_speed;
+const Q4 = SP.find((r) => r.tag === "q128-Q4_K_M");
+const ceil = BW * 1e9 / (RD.per_token_gib * 2 ** 30);
+const W = 960, HH = 460;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "Prefill, decode, bandwidth and batching");
+const G = Array.from({ length: 8 }, () => S("g", { cls: "fade hide" }, svg));
+const title = (g, t) => S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: t }, g);
+
+/* 0: two phases */
+const g0 = G[0];
+title(g0, "two phases of one request (step 4's speed test, 19 B Q4_K_M)");
+const pre = Q4.prompt_tokens / Q4.prompt_tok_s, dec = 256 / Q4.gen_tok_s, tsc = 600 / (pre + dec);
+const ph = [S("rect", { x: 60, y: 80, width: 0, height: 40, rx: 4, cls: "f-h" }, g0), S("rect", { x: 60 + pre * tsc, y: 80, width: 0, height: 40, rx: 4, cls: "f-act" }, g0)];
+S("text", { x: 60, y: 146, "font-size": 12.5, text: `prefill: ${Q4.prompt_tokens.toLocaleString()} prompt tokens in ${pre.toFixed(2)} s` }, g0);
+S("text", { x: 60, y: 166, "font-size": 12, cls: "t-dim", text: `${Math.round(Q4.prompt_tok_s).toLocaleString()} tokens per second` }, g0);
+S("text", { x: 60 + (pre + dec) * tsc, y: 146, "text-anchor": "end", "font-size": 12.5, text: `decode: 256 new tokens in ${dec.toFixed(2)} s` }, g0);
+S("text", { x: 60 + (pre + dec) * tsc, y: 166, "text-anchor": "end", "font-size": 12, cls: "t-dim", text: `${Q4.gen_tok_s.toFixed(1)} tokens per second, one at a time` }, g0);
+// matrix pictures
+const mat = (x, y, w, h, cls, lab) => { S("rect", { x, y, width: w, height: h, rx: 3, cls, "fill-opacity": 0.85 }, g0); S("text", { x: x + w / 2, y: y + h + 16, "text-anchor": "middle", "font-size": 11, cls: "t-dim", text: lab }, g0); };
+S("text", { x: 60, y: 226, "font-size": 12.5, "font-weight": 600, text: "prefill: weights x many tokens" }, g0);
+mat(60, 240, 120, 120, "f-ink3", "weight matrix"); S("text", { x: 196, y: 306, "font-size": 18, text: "x" }, g0); mat(220, 240, 140, 120, "f-h", "512 tokens at once");
+S("text", { x: 60, y: 404, "font-size": 12, cls: "t-dim", text: "each weight fetched once, used 512 times: arithmetic is the limit" }, g0);
+S("text", { x: 520, y: 226, "font-size": 12.5, "font-weight": 600, text: "decode: weights x one token" }, g0);
+mat(520, 240, 120, 120, "f-ink3", "weight matrix"); S("text", { x: 656, y: 306, "font-size": 18, text: "x" }, g0); mat(680, 240, 10, 120, "f-act", "1 token");
+S("text", { x: 520, y: 404, "font-size": 12, cls: "t-dim", text: "each weight fetched once, used once: reading memory is the limit" }, g0);
+
+/* 1: decode streams weights */
+const g1 = G[1];
+title(g1, "generating one token: every active weight travels from VRAM to the compute units");
+S("rect", { x: 60, y: 70, width: 300, height: 320, rx: 8, cls: "box" }, g1);
+S("text", { x: 210, y: 92, "text-anchor": "middle", "font-size": 12.5, "font-weight": 600, text: "VRAM (16 GB)" }, g1);
+S("rect", { x: 600, y: 170, width: 300, height: 120, rx: 8, cls: "box" }, g1);
+S("text", { x: 750, y: 192, "text-anchor": "middle", "font-size": 12.5, "font-weight": 600, text: "compute units" }, g1);
+const blocks = [];
+for (let k = 0; k < 40; k++) blocks.push(S("rect", { x: 80 + (k % 8) * 34, y: 110 + Math.floor(k / 8) * 52, width: 28, height: 44, rx: 3, cls: k % 4 === 3 ? "f-h" : "f-keep", "fill-opacity": 0.7 }, g1));
+S("text", { x: 210, y: 380, "text-anchor": "middle", "font-size": 11, cls: "t-dim", text: "40 layers (blue: attention, teal: DeltaNet)" }, g1);
+const pkt = S("rect", { x: 380, y: 222, width: 26, height: 16, rx: 3, cls: "f-act" }, g1);
+S("text", { x: 480, y: 210, "text-anchor": "middle", "font-size": 12, cls: "t-act", text: `${BW} GB/s` }, g1);
+S("line", { x1: 370, x2: 590, y1: 230, y2: 230, stroke: "var(--ink3)", "stroke-dasharray": "4 4" }, g1);
+const tokT = S("text", { x: 750, y: 240, "text-anchor": "middle", "font-size": 20, "font-weight": 700, cls: "t-mono", text: "" }, g1);
+const gbT = S("text", { x: 750, y: 268, "text-anchor": "middle", "font-size": 12, cls: "t-dim", text: "" }, g1);
+S("text", { x: 600, y: 330, "font-size": 12, cls: "t-dim", text: `${RD.per_token_gib.toFixed(2)} GiB per token. At ${BW} GB/s:` }, g1);
+S("text", { x: 600, y: 350, "font-size": 12, cls: "t-dim", text: `at most ${ceil.toFixed(0)} tokens per second; measured ${Q4.gen_tok_s.toFixed(0)}.` }, g1);
+let flowTimer = null, flowK = 0, flowTok = 0;
+function flow(i) {
+  clearInterval(flowTimer);
+  if (i !== 1) return;
+  const tick = () => {
+    blocks.forEach((b, k) => b.setAttribute("fill-opacity", k === flowK ? 1 : 0.35));
+    pkt.setAttribute("x", 380 + (flowK % 8) * 25);
+    flowK = (flowK + 1) % 40;
+    if (flowK === 0) flowTok++;
+    tokT.textContent = `token ${flowTok + 1}, layer ${flowK}`;
+    gbT.textContent = `${(flowTok * RD.per_token_gib + (flowK / 40) * RD.per_token_gib).toFixed(1)} GiB read so far`;
+  };
+  tick();
+  if (!REDUCED) flowTimer = setInterval(tick, 70);
+}
+
+/* 2: what one token reads */
+const g2 = G[2];
+title(g2, "what one generated token reads, from the 19 B Q4_K_M file (sizes from the GGUF)");
+const parts = [["routed experts", RD.parts_gib.experts, RD.parts_gib.experts * 8 / 128, "f-act"], ["attention, DeltaNet, routers, norms", RD.parts_gib["attention, DeltaNet, router, norms"], RD.parts_gib["attention, DeltaNet, router, norms"], "f-h"], ["lm_head", RD.parts_gib.lm_head, RD.parts_gib.lm_head, "f-route"], ["shared experts", RD.parts_gib["shared expert"], RD.parts_gib["shared expert"], "f-keep"], ["embedding (one row)", RD.parts_gib.embedding, 0.0001, "f-ink3"]];
+const gsc = 800 / 11;
+[["in the file", 1], ["read per token", 2]].forEach(([lab, col], r) => {
+  const y = 80 + r * 110;
+  S("text", { x: 60, y: y - 8, "font-size": 12.5, "font-weight": 600, text: `${lab}: ${(r ? RD.per_token_gib : parts.reduce((s, p) => s + p[1], 0)).toFixed(2)} GiB` }, g2);
+  let x = 60;
+  parts.forEach((p) => { const w = p[col] * gsc; S("rect", { x, y, width: Math.max(0.5, w), height: 40, cls: p[3] }, g2); x += w; });
+});
+parts.forEach((p, k) => { S("rect", { x: 60 + (k % 2) * 420, y: 290 + Math.floor(k / 2) * 24, width: 12, height: 12, cls: p[3] }, g2); S("text", { x: 78 + (k % 2) * 420, y: 301 + Math.floor(k / 2) * 24, "font-size": 11.5, cls: "t-dim", text: `${p[0]}: ${p[1].toFixed(2)} → ${p[2].toFixed(2)} GiB` }, g2); });
+S("text", { x: 60, y: 396, "font-size": 12.5, text: "The experts are 86% of the file but 32% of what a token reads: 8 of 128 per layer." }, g2);
+
+/* 3: the ceiling */
+const g3 = G[3];
+title(g3, `tokens per second: the memory ceiling against the measured speed (${TH.gpu.name})`);
+const denseCeil = BW * 1e9 / (10.58 * 2 ** 30);
+[["ceiling for this MoE: bandwidth ÷ 1.80 GiB", ceil, "f-ink3"], ["measured (step 4)", Q4.gen_tok_s, "f-act"], ["ceiling if it were a dense 19 B at 4 bits (÷ 10.6 GiB)", denseCeil, "f-cut"]].forEach(([n, v, cls], k) => {
+  const y = 80 + k * 80;
+  S("text", { x: 60, y, "font-size": 12.5, text: n }, g3);
+  const bar = S("rect", { x: 60, y: y + 10, width: 0, height: 34, rx: 4, cls }, g3);
+  bar.dataset.w = (v / 500) * 780;
+  S("text", { x: 70 + (v / 500) * 780, y: y + 33, "font-size": 13, "font-weight": 600, cls: "t-mono", text: `${v.toFixed(0)} tok/s` }, g3);
+});
+const bars3 = [...g3.querySelectorAll("rect")];
+S("text", { x: 60, y: 350, "font-size": 12.5, cls: "t-dim", text: `Measured is ${(Q4.gen_tok_s / ceil * 100).toFixed(0)}% of the ceiling: 40 layers of many small operations, expert selection and kernel launches all take time` }, g3);
+S("text", { x: 60, y: 370, "font-size": 12.5, cls: "t-dim", text: "that is not reading. Below about this size, smaller quantizations no longer help (step 4: IQ2_XXS 203, Q4_K_M 212)." }, g3);
+
+/* 4: beyond VRAM */
+const g4 = G[4];
+title(g4, "generation speed against file size (step 4): what fits is fast, what spills is not");
+const P4 = { x: 80, y: 60, w: 780, h: 300 }, X4 = (v) => P4.x + (v / 36) * P4.w, Y4 = (v) => P4.y + P4.h - (v / 250) * P4.h;
+[0, 50, 100, 150, 200, 250].forEach((t) => { S("line", { x1: P4.x, x2: P4.x + P4.w, y1: Y4(t), y2: Y4(t), stroke: "var(--grid)" }, g4); S("text", { x: P4.x - 8, y: Y4(t) + 4, "text-anchor": "end", "font-size": 10.5, cls: "t-faint t-mono", text: t }, g4); });
+[5, 10, 15, 20, 25, 30, 35].forEach((t) => S("text", { x: X4(t), y: P4.y + P4.h + 16, "text-anchor": "middle", "font-size": 10.5, cls: "t-faint t-mono", text: `${t} GiB` }, g4));
+const q128 = SP.filter((r) => r.tag.startsWith("q128") && r.gib).sort((a, b) => a.gib - b.gib);
+S("path", { d: q128.map((r, k) => `${k ? "L" : "M"}${X4(r.gib)},${Y4(r.gen_tok_s)}`).join(" "), fill: "none", stroke: "var(--ink3)", "stroke-width": 2 }, g4);
+q128.forEach((r) => { const fit = r.gib < 13.5; S("circle", { cx: X4(r.gib), cy: Y4(r.gen_tok_s), r: 5, fill: fit ? "var(--keep)" : "var(--cut)" }, g4); if (!fit) S("text", { x: X4(r.gib) + 8, y: Y4(r.gen_tok_s) - 6, "font-size": 11, cls: "t-mono", text: r.tag.replace("q128-", "") }, g4); });
+S("line", { x1: X4(13.5), x2: X4(13.5), y1: P4.y, y2: P4.y + P4.h, stroke: "var(--act)", "stroke-dasharray": "5 4" }, g4);
+S("text", { x: X4(13.5) + 6, y: P4.y + 14, "font-size": 11, cls: "t-act", text: "fits in VRAM with context ←" }, g4);
+S("text", { x: P4.x + 300, y: P4.y + 60, "font-size": 12, cls: "t-dim", text: "Spilled weights come over PCIe 4.0 x16: ~32 GB/s instead of 896." }, g4);
+
+/* 5: batching */
+const g5 = G[5];
+title(g5, "several requests at once (scripts/batch_speed.py, 256 tokens each)");
+const P5 = { x: 80, y: 60, w: 520, h: 300 }, X5 = (n) => P5.x + (Math.log2(n) / 4) * P5.w, Y5 = (v) => P5.y + P5.h - (v / 550) * P5.h;
+[0, 100, 200, 300, 400, 500].forEach((t) => { S("line", { x1: P5.x, x2: P5.x + P5.w, y1: Y5(t), y2: Y5(t), stroke: "var(--grid)" }, g5); S("text", { x: P5.x - 8, y: Y5(t) + 4, "text-anchor": "end", "font-size": 10.5, cls: "t-faint t-mono", text: t }, g5); });
+BS.forEach((r) => S("text", { x: X5(r.parallel), y: P5.y + P5.h + 16, "text-anchor": "middle", "font-size": 10.5, cls: "t-faint t-mono", text: r.parallel }, g5));
+S("text", { x: P5.x + P5.w, y: P5.y + P5.h + 34, "text-anchor": "end", "font-size": 11.5, cls: "t-dim", text: "requests at the same time" }, g5);
+[["total_tok_s", "var(--keep)", "total tokens per second"], ["per_request_tok_s", "var(--act)", "per request"]].forEach(([k, col, lab], j) => {
+  S("path", { d: BS.map((r, i) => `${i ? "L" : "M"}${X5(r.parallel)},${Y5(r[k])}`).join(" "), fill: "none", stroke: col, "stroke-width": 2.4 }, g5);
+  BS.forEach((r) => { S("circle", { cx: X5(r.parallel), cy: Y5(r[k]), r: 4.5, fill: col }, g5); S("text", { x: X5(r.parallel), y: Y5(r[k]) - 9, "text-anchor": "middle", "font-size": 10.5, cls: "t-mono", text: Math.round(r[k]) }, g5); });
+  S("text", { x: 640, y: 80 + j * 22, "font-size": 12, fill: col, text: lab }, g5);
+});
+S("text", { x: 640, y: 140, "font-size": 12.5, "font-weight": 600, text: "Why not 16x?" }, g5);
+["Each request picks its own 8 experts", "per layer. The batch must read the", "union of all their choices:"].forEach((t, k) => S("text", { x: 640, y: 164 + k * 20, "font-size": 12, cls: "t-dim", text: t }, g5));
+BS.forEach((r, k) => { const d = 128 * (1 - (1 - 8 / 128) ** r.parallel); S("text", { x: 640, y: 236 + k * 20, "font-size": 12, cls: "t-mono", text: `${String(r.parallel).padStart(2)} requests: ~${d.toFixed(0)} of 128 experts` }, g5); });
+S("text", { x: 640, y: 350, "font-size": 11, cls: "t-faint", text: "(estimate, assuming random routing)" }, g5);
+
+/* 6: speculative decoding, the mechanism (illustrative tokens, measured costs) */
+const g6 = G[6];
+title(g6, "speculative decoding: something cheap drafts a few tokens, the model checks them all in one pass");
+const VC = TH.verify_cost || [], vc = (m, n) => (VC.find((r) => r.model.startsWith(m) && r.tokens === n) || {}).ms;
+const sTok = ["The", "␣train", "␣takes", "␣1.5", "␣hours", "␣for", "␣the", "␣first", "␣part"];
+const sRounds = [{ draft: ["␣takes", "␣1.5", "␣hours"], ok: 3 }, { draft: ["␣for", "␣the", "␣second"], ok: 2, fix: "␣first" }];
+const tokEls = sTok.map((t, k) => { const g = S("g", { cls: "fade" }, g6); const r = S("rect", { x: 40 + k * 96, y: 90, width: 88, height: 34, rx: 6, cls: "box" }, g); const tx = S("text", { x: 84 + k * 96, y: 112, "text-anchor": "middle", "font-size": 13, cls: "t-mono", text: t }, g); return { g, r, tx }; });
+const sNote = S("text", { x: 40, y: 170, "font-size": 13, text: "" }, g6);
+const sNote2 = S("text", { x: 40, y: 194, "font-size": 12.5, cls: "t-dim", text: "" }, g6);
+S("text", { x: 40, y: 260, "font-size": 12.5, "font-weight": 600, text: "Why it can be free: checking several tokens costs little more than producing one (llama-bench, one pass):" }, g6);
+[["Qwen3.5-2B (dense)", "Qwen3.5-2B"], ["19 B pruned MoE", "q35-reap"]].forEach(([n, m], k) => {
+  const y = 290 + k * 52;
+  S("text", { x: 40, y: y + 14, "font-size": 12, text: n }, g6);
+  [1, 4].forEach((t, j) => { const v = vc(m, t) || 0; S("rect", { x: 220, y: y + j * 20, width: v * 40, height: 16, rx: 3, cls: j ? "f-act" : "f-h" }, g6); S("text", { x: 226 + v * 40, y: y + 13 + j * 20, "font-size": 11, cls: "t-mono", text: `${t} token${t > 1 ? "s" : ""}: ${v.toFixed(2)} ms` }, g6); });
+});
+S("text", { x: 600, y: 304, "font-size": 12, cls: "t-dim", text: "Dense: 4 tokens cost 11% more than 1." }, g6);
+S("text", { x: 600, y: 324, "font-size": 12, cls: "t-dim", text: "MoE: 39% more, because each token" }, g6);
+S("text", { x: 600, y: 344, "font-size": 12, cls: "t-dim", text: "wants its own experts (the union)." }, g6);
+let specTimer = null;
+function playSpec(i) {
+  clearInterval(specTimer);
+  if (i !== 6) return;
+  let phase = 0;
+  const paint = () => {
+    tokEls.forEach((t) => { t.r.setAttribute("class", "box"); show(t.g, false); });
+    const known = phase < 3 ? 2 : 5;
+    for (let k = 0; k < known; k++) show(tokEls[k].g, true);
+    const rd = sRounds[phase < 3 ? 0 : 1], sub = phase % 3;
+    rd.draft.forEach((d, j) => { const t = tokEls[known + j]; show(t.g, true); t.tx.textContent = d; t.r.setAttribute("class", sub === 0 ? "f-act" : j < rd.ok ? "f-keep" : "f-cut"); });
+    if (sub === 2 && rd.fix) { const t = tokEls[known + rd.ok]; t.tx.textContent = rd.fix; t.r.setAttribute("class", "f-h"); }
+    sNote.textContent = sub === 0 ? `the drafter guesses ${rd.draft.length} tokens (amber)` : sub === 1 ? `one pass of the big model checks all of them: ${rd.ok} of ${rd.draft.length} match what it would have written` : rd.fix ? "the first wrong guess is replaced by the model's own token (blue); 3 tokens for one pass" : `all ${rd.ok} kept, plus the model's next token: 4 tokens for one pass`;
+    sNote2.textContent = "With greedy decoding the text is the same as without drafting; only the number of passes changes.";
+    phase = (phase + 1) % 6;
+  };
+  paint();
+  if (!REDUCED) specTimer = setInterval(paint, 1700);
+}
+
+/* 7: speculative decoding, measured */
+const g7 = G[7];
+title(g7, "measured (scripts/spec_sweep.sh, greedy, 256 tokens per prompt): tokens per second, share of drafted tokens kept");
+const SPR = TH.spec || [], sp = (tag, pr) => (SPR.find((r) => r.tag === tag && r.prompt === pr) || {});
+const PRS = ["prose", "code", "math", "edit"];
+[[`Qwen3.5-2B: no drafting vs its own MTP head (3 drafted)`, [["2b-none", "none", "f-ink3"], ["2b-mtp3", "MTP", "f-keep"]], 40], [`19 B pruned: no drafting vs a 2 B draft model vs n-gram lookup`, [["19b-none", "none", "f-ink3"], ["19b-draft2b", "2 B draft", "f-cut"], ["19b-ngram", "n-gram", "f-act"]], 500]].forEach(([t, cfgs, x0]) => {
+  S("text", { x: x0, y: 66, "font-size": 12, "font-weight": 600, text: t }, g7);
+  PRS.forEach((pr, k) => {
+    const y = 84 + k * 82;
+    S("text", { x: x0, y: y + 12, "font-size": 11.5, cls: "t-dim", text: pr }, g7);
+    cfgs.forEach(([tag, lab, cls], j) => {
+      const r = sp(tag, pr), v = r.gen_tok_s || 0, acc = r.draft_n ? ` · ${Math.round(100 * r.draft_accepted / r.draft_n)}% kept` : "";
+      S("rect", { x: x0 + 60, y: y + j * 20, width: v * 0.55, height: 16, rx: 3, cls }, g7);
+      S("text", { x: x0 + 66 + v * 0.55, y: y + 13 + j * 20, "font-size": 10.5, cls: "t-mono", text: `${lab} ${v.toFixed(0)}${acc}` }, g7);
+    });
+  });
+});
+S("text", { x: 40, y: 430, "font-size": 12, cls: "t-dim", text: "MTP: +45% on math and the edit task, nothing on prose (only 42% of guesses right). The 2 B drafter costs as much per token as the 19 B: slower." }, g7);
+
+const steps = [
+  { title: "Two phases", text: "Reading the prompt (prefill) handles all 1,621 tokens at once; writing (decode) produces one token at a time. Decode took four times longer for six times fewer tokens.", ms: 7000 },
+  { title: "Decode streams the weights", text: "For every new token, each active weight must travel from VRAM to the compute units once, and is used once. The GPU spends its time waiting for memory, not multiplying.", ms: 8000 },
+  { title: "What one token reads", text: "1.80 GiB of the 10.58 GiB file: all of attention, DeltaNet, the routers and the lm_head, but only 8 of the 128 experts per layer. The experts are 86% of the file and 32% of the reading.", ms: 8000 },
+  { title: "The ceiling and reality", text: "896 GB/s ÷ 1.80 GiB ≈ 463 tokens per second at most; measured 212. A dense 19 B model at the same 4 bits would be capped near 80.", ms: 7500 },
+  { title: "Spilling is a cliff", text: "Everything that fits in VRAM ran at 186–212 tokens per second. Q6_K, Q8_0 and BF16 spilled part of their weights into system RAM and fell to 108, 54 and 20.", ms: 7000 },
+  { title: "Batching: more users, same weights", text: "16 requests at once: 488 tokens per second in total, 31 each. Every weight read now serves several tokens, but in a MoE each request wants different experts, so the gain flattens.", ms: 8000 },
+  { title: "Speculative decoding: guess, then check", text: "The same trick within one request: something cheap drafts a few tokens, and the model checks them all in one pass. Every correct guess is a token for free. Checking 4 tokens costs the dense 2 B only 11% more than producing 1.", ms: 11000 },
+  { title: "Speculative decoding, measured", text: "The 2 B's own MTP head made predictable text (math, an edit that repeats code) 45% faster and prose no faster. On the MoE, a separate 2 B drafter was too slow to pay off, and n-gram drafts rarely matched.", ms: 9000 },
+];
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    G.forEach((g, k) => show(g, k === i));
+    animAttrs(ph[0], { width: i === 0 ? pre * tsc : 0 }, 800);
+    animAttrs(ph[1], { width: i === 0 ? dec * tsc : 0 }, 1600);
+    bars3.forEach((b) => animAttrs(b, { width: i === 3 ? +b.dataset.w : 0 }, 900));
+    flow(i); playSpec(i);
+  },
+});
+
+/* try it */
+const spSvg = svgRoot(document.getElementById("sp"), 960, 120, "Estimated speed ceiling");
+function tryRender() {
+  const bw = +document.getElementById("hw").value, act = +document.getElementById("act").value, bpw = +document.getElementById("bpw").value;
+  const bytes = act * 1e9 * bpw / 8, c = bw * 1e9 / bytes;
+  document.getElementById("sp-out").textContent = `${act} B active x ${bpw} bits = ${(bytes / 1e9).toFixed(2)} GB per token`;
+  clear(spSvg);
+  const X = (v) => 10 + Math.min(1, Math.log10(Math.max(v, 1)) / 3) * 760;
+  [1, 10, 100, 1000].forEach((t) => { S("line", { x1: X(t), x2: X(t), y1: 10, y2: 70, stroke: "var(--grid)" }, spSvg); S("text", { x: X(t), y: 86, "text-anchor": "middle", "font-size": 10.5, cls: "t-faint t-mono", text: `${t} tok/s` }, spSvg); });
+  S("rect", { x: 10, y: 20, width: X(c) - 10, height: 18, rx: 3, cls: "f-ink3" }, spSvg);
+  S("rect", { x: 10, y: 44, width: X(c * 0.46) - 10, height: 18, rx: 3, cls: "f-act" }, spSvg);
+  S("text", { x: X(c) + 8, y: 34, "font-size": 12, cls: "t-mono", text: `ceiling ${c >= 100 ? c.toFixed(0) : c.toFixed(1)} tok/s` }, spSvg);
+  S("text", { x: X(c * 0.46) + 8, y: 58, "font-size": 12, cls: "t-mono t-act", text: `at 46% (as measured here) ≈ ${(c * 0.46).toFixed(c * 0.46 >= 100 ? 0 : 1)} tok/s` }, spSvg);
+  S("text", { x: 10, y: 112, "font-size": 11.5, cls: "t-dim", text: "Try: this MoE (3.4 B active, 4.9 bits) on the CPU's DDR4; then a dense 27 B at 4.9 bits on the RTX 5070 Ti." }, spSvg);
+}
+["hw", "act", "bpw"].forEach((id) => document.getElementById(id).addEventListener("input", tryRender));
+tryRender();
+</script>
+</body>
+</html>

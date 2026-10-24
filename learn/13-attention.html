@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Attention and KV Cache</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Chapter 13</div>
+    <h1>Attention, Gated DeltaNet and the KV cache</h1>
+    <p class="lede">The MoE half of a layer works on each token alone; the token mixer is where tokens exchange information.
+      Qwen3.5 uses exact attention in 10 of its 40 layers and a fixed-size memory, Gated DeltaNet, in the other 30. This page
+      shows how both work, why attention needs a cache that grows with every token, and what that costs on a 16 GB card.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="t13">
+    <h2 id="t13">Try it: how much memory does a context cost?</h2>
+    <div class="row">
+      <label for="ctx">context length <input id="ctx" type="range" min="10" max="18" step="0.25" value="15"></label>
+      <label for="kvt">KV cache <select id="kvt" class="btn"><option value="2">f16 (2 bytes)</option><option value="1.0625">q8_0 (1.06 bytes)</option><option value="0.5625">q4_0 (0.56 bytes)</option></select></label>
+      <span class="readout" id="ctx-out"></span>
+    </div>
+    <div class="stage" id="mem"></div>
+    <p class="note">Computed from the formula (layers x 2 x KV heads x 256 x bytes per number) for three designs, plus the
+      19 B Q4_K_M's 10.3 GiB of weights and llama.cpp's compute buffers (interpolated from the measured 108–820 MiB). The
+      formula matches llama.cpp's measured allocation exactly at every length that was tested (4k, 32k, 128k, 256k).</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p><b>Attention</b>: each token turns its hidden state into a query, a key and a value; it compares its query with the
+      keys of all earlier tokens, softmaxes the scores and averages their values. Exact, but the work and the memory grow
+      with the length of the text.</p>
+    <p><b>The KV cache</b> stores the keys and values of past tokens so they are computed once. Here it costs 20 KiB per token
+      (10 attention layers x 2 x 2 KV heads x 256 numbers x 2 bytes): 640 MiB at 32k tokens, 5 GiB at the full 262k. An 8-bit
+      cache halves that and makes the full context fit on 16 GB.</p>
+    <p><b>Gated DeltaNet</b> keeps a fixed 128 x 128 memory per head instead, updated by the delta rule: erase what is stored
+      under the token's key, write its value there, and let a gate decide how fast old content fades. 60 MiB for all 30 layers,
+      at any length; the price is that old details blur, which the 10 exact attention layers make up for.</p>
+  </section>
+
+  <section class="facts" aria-label="Facts">
+    <div class="fact"><span class="k">Layer pattern</span><span class="v">3 : 1</span><span class="n">DeltaNet, DeltaNet, DeltaNet, attention</span></div>
+    <div class="fact"><span class="k">Attention heads</span><span class="v">16 Q · 2 KV</span><span class="n">256 dimensions each (GQA)</span></div>
+    <div class="fact"><span class="k">KV cache</span><span class="v">20 KiB / token</span><span class="n">measured exactly by llama.cpp</span></div>
+    <div class="fact"><span class="k">DeltaNet state</span><span class="v">63 MiB</span><span class="n">at 4 tokens and at 262,144</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script src="theory-data.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+const C = TH.config;
+const KVPT = (layers, heads, bytes) => layers * 2 * heads * C.head_dim * bytes; // bytes per token
+const W = 960, HH = 460;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "Attention, the KV cache and Gated DeltaNet");
+const G = Array.from({ length: 8 }, () => S("g", { cls: "fade hide" }, svg));
+const title = (g, t) => S("text", { x: 24, y: 34, "font-size": 14, "font-weight": 600, text: t }, g);
+const fmtB = (b) => (b >= 2 ** 30 ? `${(b / 2 ** 30).toFixed(b >= 100 * 2 ** 30 ? 0 : 1)} GiB` : b >= 2 ** 20 ? `${(b / 2 ** 20).toFixed(0)} MiB` : `${(b / 1024).toFixed(0)} KiB`);
+
+/* 0: the layer pattern */
+const g0 = G[0];
+title(g0, "40 layers, two kinds of token mixer");
+for (let l = 0; l < 40; l++) {
+  const att = (l + 1) % C.full_attention_interval === 0, x = 40 + l * 22;
+  S("rect", { x, y: 90, width: 18, height: 60, rx: 4, fill: att ? "var(--h)" : "var(--keep)", "fill-opacity": att ? 1 : 0.55 }, g0);
+  S("rect", { x, y: 156, width: 18, height: 40, rx: 4, cls: "f-act", "fill-opacity": 0.5 }, g0);
+  if (l % 4 === 3) S("text", { x: x + 9, y: 82, "text-anchor": "middle", "font-size": 10, cls: "t-faint t-mono", text: l }, g0);
+}
+S("text", { x: 30, y: 125, "text-anchor": "end", "font-size": 11, cls: "t-dim", text: "mixer" }, g0);
+S("text", { x: 30, y: 180, "text-anchor": "end", "font-size": 11, cls: "t-dim", text: "MoE" }, g0);
+[["var(--keep)", "Gated DeltaNet: fixed-size memory (30 layers)"], ["var(--h)", "full attention: exact, needs the KV cache (10 layers)"], ["var(--act)", "MoE: each token alone, no exchange (chapters 3–4)"]].forEach(([c, t], k) => {
+  S("rect", { x: 40, y: 236 + k * 26, width: 14, height: 14, rx: 3, fill: c, "fill-opacity": k === 0 ? 0.55 : k === 2 ? 0.5 : 1 }, g0);
+  S("text", { x: 62, y: 248 + k * 26, "font-size": 12.5, text: t }, g0);
+});
+S("text", { x: 40, y: 340, "font-size": 12.5, cls: "t-dim", text: "The mixer is the only place where one token can use information from another." }, g0);
+S("text", { x: 40, y: 360, "font-size": 12.5, cls: "t-dim", text: "Without it, every token would be processed as if it were the whole text." }, g0);
+
+/* 1: query, key, value */
+const g1 = G[1];
+title(g1, "attention: the last token's query against every earlier token's key (illustrative numbers)");
+const toks = ["The", "␣capital", "␣of", "␣Australia", "␣is"], sc = [0.4, 2.6, 0.3, 3.4, 1.0], wts = softmax(sc);
+const tx = (k) => 70 + k * 150;
+const kBars = [], wBars = [], arcs = [];
+toks.forEach((t, k) => {
+  S("rect", { x: tx(k) - 50, y: 60, width: 100, height: 30, rx: 6, cls: "box" }, g1);
+  S("text", { x: tx(k), y: 80, "text-anchor": "middle", "font-size": 13, cls: "t-mono", text: t }, g1);
+  S("text", { x: tx(k), y: 112, "text-anchor": "middle", "font-size": 10.5, cls: "t-dim", text: k === 4 ? "query q, key, value" : "key k, value v" }, g1);
+  S("text", { x: tx(k), y: 150, "text-anchor": "middle", "font-size": 10.5, cls: "t-faint", text: "score q·k / 16" }, g1);
+  kBars.push(S("rect", { x: tx(k) - 20, y: 160, width: 40, height: 0, rx: 3, cls: "f-route" }, g1));
+  S("text", { x: tx(k), y: 270, "text-anchor": "middle", "font-size": 11, cls: "t-mono", text: sc[k].toFixed(1) }, g1);
+  S("text", { x: tx(k), y: 296, "text-anchor": "middle", "font-size": 10.5, cls: "t-faint", text: "softmax weight" }, g1);
+  wBars.push(S("rect", { x: tx(k) - 20, y: 306, width: 40, height: 0, rx: 3, cls: "f-h" }, g1));
+  S("text", { x: tx(k), y: 412, "text-anchor": "middle", "font-size": 11, cls: "t-mono", text: `${(wts[k] * 100).toFixed(0)}%` }, g1);
+});
+S("text", { x: 24, y: 440, "font-size": 12, cls: "t-dim", text: "Output = Σ weight x value: mostly the values of '␣Australia' and '␣capital', which is what the next token needs. Scores are made up; the mechanism is real." }, g1);
+
+/* 2: causal mask */
+const g2 = G[2];
+title(g2, "every token attends to itself and to all earlier tokens, never to later ones");
+const NM = 8, cell = 34, mx = 260, my = 70;
+const maskCells = [];
+for (let i = 0; i < NM; i++) for (let j = 0; j < NM; j++) {
+  const ok = j <= i;
+  maskCells.push(S("rect", { x: mx + j * cell, y: my + i * cell, width: cell - 3, height: cell - 3, rx: 3, fill: ok ? "var(--h)" : "var(--grid)", "fill-opacity": ok ? 0.25 + 0.75 * rng(i * 9 + j)() : 1 }, g2));
+}
+S("text", { x: mx - 10, y: my + 14, "text-anchor": "end", "font-size": 11, cls: "t-dim", text: "token 1 (query)" }, g2);
+S("text", { x: mx - 10, y: my + NM * cell - 14, "text-anchor": "end", "font-size": 11, cls: "t-dim", text: `token ${NM}` }, g2);
+S("text", { x: mx, y: my + NM * cell + 18, "font-size": 11, cls: "t-dim", text: "keys of tokens 1 … 8 →" }, g2);
+S("text", { x: 600, y: 110, "font-size": 12.5, text: "n tokens: n(n+1)/2 comparisons per head." }, g2);
+S("text", { x: 600, y: 134, "font-size": 12.5, cls: "t-dim", text: "8 tokens: 36. 1,000: 500,500." }, g2);
+S("text", { x: 600, y: 158, "font-size": 12.5, cls: "t-dim", text: "262,144: 34 billion, per head, per layer." }, g2);
+S("text", { x: 600, y: 200, "font-size": 12.5, text: "The mask is also why training is efficient:" }, g2);
+S("text", { x: 600, y: 224, "font-size": 12.5, cls: "t-dim", text: "every row predicts its own next token, so one" }, g2);
+S("text", { x: 600, y: 248, "font-size": 12.5, cls: "t-dim", text: "pass over a text trains on all its positions." }, g2);
+
+/* 3: GQA */
+const g3 = G[3];
+title(g3, `grouped-query attention: ${C.num_attention_heads} query heads share ${C.num_key_value_heads} key/value heads`);
+const qx = (h) => 60 + h * 54;
+for (let h = 0; h < C.num_attention_heads; h++) {
+  S("rect", { x: qx(h), y: 80, width: 40, height: 40, rx: 5, cls: "f-route", "fill-opacity": 0.8 }, g3);
+  S("text", { x: qx(h) + 20, y: 105, "text-anchor": "middle", "font-size": 11, cls: "t-mono", fill: "var(--paper)", text: `q${h + 1}` }, g3);
+  const kv = Math.floor(h / (C.num_attention_heads / C.num_key_value_heads));
+  S("line", { x1: qx(h) + 20, y1: 122, x2: 250 + kv * 420, y2: 238, stroke: "var(--route)", "stroke-opacity": 0.5 }, g3);
+}
+for (let k = 0; k < C.num_key_value_heads; k++) {
+  S("rect", { x: 190 + k * 420, y: 240, width: 120, height: 44, rx: 6, cls: "f-h" }, g3);
+  S("text", { x: 250 + k * 420, y: 267, "text-anchor": "middle", "font-size": 12.5, fill: "var(--paper)", text: `K/V head ${k + 1}` }, g3);
+}
+S("text", { x: 60, y: 330, "font-size": 12.5, text: "Only the key/value heads are cached. 16 KV heads would need 8x more memory per token:" }, g3);
+S("text", { x: 60, y: 354, "font-size": 12.5, cls: "t-dim t-mono", text: `10 layers x 2 x 16 x 256 x 2 bytes = ${fmtB(KVPT(10, 16, 2))} per token, instead of ${fmtB(KVPT(10, 2, 2))}` }, g3);
+S("text", { x: 60, y: 384, "font-size": 12.5, cls: "t-dim", text: "Each query head still computes its own attention pattern; 8 heads just read the same keys and values." }, g3);
+
+/* 4: the cache grows */
+const g4 = G[4];
+title(g4, "generating: each new token adds one key and one value per attention layer, and reads all earlier ones");
+const gen = ["The", "␣capital", "␣of", "␣Australia", "␣is", "␣Canberra", ".", "␣It", "␣is", "␣the"];
+const cacheRows = gen.map((t, k) => {
+  const g = S("g", { cls: "fade" }, g4);
+  S("text", { x: 150, y: 86 + k * 32, "text-anchor": "end", "font-size": 12, cls: "t-mono", text: t }, g);
+  for (let l = 0; l < 10; l++) {
+    S("rect", { x: 170 + l * 44, y: 72 + k * 32, width: 18, height: 22, rx: 2, cls: "f-h", "fill-opacity": 0.8 }, g);
+    S("rect", { x: 190 + l * 44, y: 72 + k * 32, width: 18, height: 22, rx: 2, cls: "f-keep", "fill-opacity": 0.8 }, g);
+  }
+  return g;
+});
+for (let l = 0; l < 10; l++) S("text", { x: 188 + l * 44, y: 62, "text-anchor": "middle", "font-size": 10, cls: "t-faint t-mono", text: `L${l * 4 + 3}` }, g4);
+const cacheTxt = S("text", { x: 640, y: 120, "font-size": 22, "font-weight": 700, cls: "t-mono", text: "" }, g4);
+const cacheSub = S("text", { x: 640, y: 146, "font-size": 12, cls: "t-dim", text: "" }, g4);
+S("text", { x: 640, y: 200, "font-size": 12, cls: "t-dim", text: "blue = keys, teal = values, in each of" }, g4);
+S("text", { x: 640, y: 218, "font-size": 12, cls: "t-dim", text: "the 10 attention layers (3, 7, …, 39)." }, g4);
+S("text", { x: 640, y: 254, "font-size": 12, cls: "t-dim", text: "Per token: 10 x 2 x 2 heads x 256 x 2 bytes" }, g4);
+S("text", { x: 640, y: 272, "font-size": 12, cls: "t-dim", text: "= 20 KiB. Rows are never recomputed." }, g4);
+let growTimer = null;
+function grow(i) {
+  clearInterval(growTimer);
+  let n = 5;
+  const paint = () => { cacheRows.forEach((r, k) => show(r, k < n)); cacheTxt.textContent = `${n} tokens · ${n * 20} KiB`; cacheSub.textContent = n <= 5 ? "after reading the 5-token prompt" : `after generating ${n - 5} token${n > 6 ? "s" : ""}`; };
+  paint();
+  if (i === 4 && !REDUCED) growTimer = setInterval(() => { n = n >= gen.length ? 5 : n + 1; paint(); }, 900);
+  else if (REDUCED) { n = gen.length; paint(); }
+}
+
+/* 5: measured memory */
+const g5 = G[5];
+title(g5, "measured by llama.cpp: GPU memory of the 19 B Q4_K_M against context length");
+const KM = TH.kv_memory;
+const ML = 190, MR = 860, mscale = (MR - ML) / 17000, free = 14945;
+KM.forEach((r, k) => {
+  const y = 64 + k * 40 + (r.kv_type === "q8_0" ? 16 : 0);
+  S("text", { x: ML - 10, y: y + 16, "text-anchor": "end", "font-size": 11.5, cls: "t-mono", text: `${r.ctx.toLocaleString()} · ${r.kv_type}` }, g5);
+  let x = ML;
+  [[r.model_mib, "f-ink3"], [r.kv_mib, "f-h"], [r.recurrent_mib, "f-keep"], [r.compute_mib, "f-act"]].forEach(([v, cls]) => { S("rect", { x, y, width: Math.max(1, v * mscale), height: 24, cls }, g5); x += v * mscale; });
+  S("text", { x: x + 6, y: y + 16, "font-size": 11.5, cls: r.projected_mib > free ? "t-mono t-cut" : "t-mono", text: `${(r.projected_mib / 1024).toFixed(1)} GiB${r.projected_mib > free ? " — does not fit" : ""}` }, g5);
+});
+const fx5 = ML + free * mscale;
+S("line", { x1: fx5, x2: fx5, y1: 52, y2: 410, stroke: "var(--cut)", "stroke-dasharray": "5 4", "stroke-width": 1.6 }, g5);
+S("text", { x: fx5 - 4, y: 48, "text-anchor": "end", "font-size": 11, cls: "t-cut", text: "14.6 GiB free" }, g5);
+[["f-ink3", "weights 10.3 GiB"], ["f-h", "KV cache"], ["f-keep", "DeltaNet state 63 MiB"], ["f-act", "compute buffers"]].forEach(([cls, t], k) => { S("rect", { x: ML + k * 170, y: 428, width: 12, height: 12, cls }, g5); S("text", { x: ML + 18 + k * 170, y: 439, "font-size": 11.5, cls: "t-dim", text: t }, g5); });
+
+/* 6: DeltaNet */
+const g6 = G[6];
+title(g6, "Gated DeltaNet: one fixed matrix per head, updated by every token (8 x 8 here; 128 x 128 in the model)");
+const N6 = 8, c6 = 30, sx = 70, sy = 70;
+const Scells = [];
+for (let i = 0; i < N6; i++) for (let j = 0; j < N6; j++) Scells.push(S("rect", { x: sx + j * c6, y: sy + i * c6, width: c6 - 2, height: c6 - 2, rx: 2, fill: "var(--grid)" }, g6));
+S("text", { x: sx, y: sy + N6 * c6 + 20, "font-size": 11.5, cls: "t-dim", text: "memory S (blue +, red −)" }, g6);
+const stepT = S("text", { x: 400, y: 90, "font-size": 15, "font-weight": 600, cls: "t-mono", text: "" }, g6);
+["S ← α · S · (I − β k kᵀ) + β v kᵀ", "", "α: how much to keep (forget gate)", "β: how strongly to write", "k kᵀ part: erase what is stored under key k", "v kᵀ part: store value v under key k", "", "read: output = S · q"].forEach((t, k) => S("text", { x: 400, y: 130 + k * 22, "font-size": k ? 12.5 : 14, cls: k ? "t-dim" : "t-mono", text: t }, g6));
+S("text", { x: 400, y: 330, "font-size": 12.5, text: `Size never changes: ${C.linear_num_value_heads} heads x ${C.linear_key_head_dim} x ${C.linear_value_head_dim} x 4 bytes = 2 MiB per layer,` }, g6);
+S("text", { x: 400, y: 352, "font-size": 12.5, text: "x 30 layers = 60 MiB, at 4 tokens or at 262,144." }, g6);
+let dTimer = null;
+const r6 = rng(11);
+let Smat = Array.from({ length: N6 }, () => new Array(N6).fill(0)), tok6 = 0;
+function deltaStep() {
+  const k = Array.from({ length: N6 }, () => gauss(r6)), n = Math.hypot(...k); k.forEach((_, i) => (k[i] /= n));
+  const v = Array.from({ length: N6 }, () => gauss(r6) * 0.8), alpha = 0.9, beta = 0.8;
+  const Sk = Smat.map((row) => row.reduce((s, x, j) => s + x * k[j], 0)); // S k
+  Smat = Smat.map((row, i) => row.map((x, j) => alpha * (x - beta * Sk[i] * k[j]) + beta * v[i] * k[j]));
+  Smat.forEach((row, i) => row.forEach((x, j) => { const c = Scells[i * N6 + j]; c.style.fill = x >= 0 ? "var(--h)" : "var(--cut)"; c.style.fillOpacity = clamp(Math.abs(x) * 1.6, 0.05, 1).toFixed(2); }));
+  tok6++; stepT.textContent = `token ${tok6}: memory still ${N6} x ${N6}`;
+}
+function playDelta(i) { clearInterval(dTimer); if (i === 6) { deltaStep(); if (!REDUCED) dTimer = setInterval(deltaStep, 1100); } }
+
+/* 7: why mix */
+const g7 = G[7];
+title(g7, "memory per sequence at the full 262,144-token context, three designs");
+const ctxMax = C.max_position_embeddings;
+const designs = [["all 40 layers attention, 16 KV heads (no GQA)", KVPT(40, 16, 2)], ["all 40 layers attention, 2 KV heads", KVPT(40, 2, 2)], ["Qwen3.5: 10 attention + 30 DeltaNet (this model)", KVPT(10, 2, 2)]];
+const maxB = designs[0][1] * ctxMax;
+designs.forEach(([n, b], k) => {
+  const y = 80 + k * 90, tot = b * ctxMax;
+  S("text", { x: 40, y, "font-size": 12.5, text: n }, g7);
+  S("rect", { x: 40, y: y + 10, width: Math.max(3, Math.sqrt(tot / maxB) * 780), height: 28, rx: 4, fill: k === 2 ? "var(--keep)" : "var(--ink3)" }, g7);
+  S("text", { x: 50 + Math.max(3, Math.sqrt(tot / maxB) * 780), y: y + 30, "font-size": 12, cls: "t-mono", text: `${fmtB(tot)} (${fmtB(b)} per token)` }, g7);
+});
+S("text", { x: 40, y: 360, "font-size": 12, cls: "t-dim", text: "Bar length is the square root of the size, so the small ones stay visible. The DeltaNet layers add 63 MiB in total." }, g7);
+S("text", { x: 40, y: 384, "font-size": 12, cls: "t-dim", text: "Exact recall from 10 layers, cheap fixed memory in 30: long contexts that fit next to the model on one GPU." }, g7);
+
+const steps = [
+  { title: "Two kinds of token mixer", text: "Each layer is a mixer (tokens exchange information) followed by MoE (each token alone). Three layers in four use Gated DeltaNet; every fourth uses full attention.", ms: 6500 },
+  { title: "Query, key, value", text: "The last token's query is compared with every earlier token's key; a softmax turns the scores into weights, and the output is the weighted average of their values. Here '␣is' mostly takes in '␣Australia' and '␣capital'.", ms: 8000 },
+  { title: "Only backwards", text: "The causal mask: token 5 can see tokens 1–5, never 6. The comparisons grow with the square of the length, which is the cost exact attention pays for long texts.", ms: 7000 },
+  { title: "Fewer keys and values to keep", text: "Grouped-query attention: 16 query heads, but only 2 key/value heads, each shared by 8. Since only keys and values are cached, this makes the cache 8x smaller.", ms: 7000 },
+  { title: "The KV cache grows by one row per token", text: "Keys and values of earlier tokens never change, so they are stored. Reading the 5-token prompt fills 5 rows (100 KiB); each generated token adds one more, 20 KiB, and reads all rows before it.", ms: 9000 },
+  { title: "Measured: context costs memory", text: "llama.cpp's own allocation. The f16 cache grows from 80 MiB at 4k tokens to 5 GiB at 262k, and the full context no longer fits; an 8-bit cache halves it and fits. The DeltaNet state stays at 63 MiB.", ms: 8000 },
+  { title: "Gated DeltaNet: a fixed memory", text: "Each head keeps one matrix that maps keys to values. Every token erases what was stored under its key, writes its value there, and fades old content a little. Watch the memory change; its size never does.", ms: 9000 },
+  { title: "Why mix them", text: "A fixed memory blurs old details; exact attention remembers everything but costs memory per token. Three cheap layers for every exact one: a quarter of a pure transformer's cache.", ms: 7000 },
+];
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    G.forEach((g, k) => show(g, k === i));
+    kBars.forEach((b, k) => animAttrs(b, { height: i === 1 ? sc[k] * 26 : 0, y: i === 1 ? 250 - sc[k] * 26 : 250 }, 700));
+    wBars.forEach((b, k) => animAttrs(b, { height: i === 1 ? wts[k] * 95 : 0, y: i === 1 ? 400 - wts[k] * 95 : 400 }, 900));
+    grow(i); playDelta(i);
+  },
+});
+
+/* try it */
+const memSvg = svgRoot(document.getElementById("mem"), 960, 230, "Memory for the chosen context length in three designs");
+const comp = (ctx) => { // compute buffer, interpolated on log(ctx) between the measured points (f16 runs)
+  const pts = KM.filter((r) => r.kv_type === "f16").map((r) => [Math.log2(r.ctx), r.compute_mib]);
+  const x = Math.log2(ctx);
+  if (x <= pts[0][0]) return pts[0][1];
+  for (let k = 1; k < pts.length; k++) if (x <= pts[k][0]) return lerp(pts[k - 1][1], pts[k][1], (x - pts[k - 1][0]) / (pts[k][0] - pts[k - 1][0]));
+  return pts[pts.length - 1][1];
+};
+function tryRender() {
+  const ctx = Math.round(2 ** +document.getElementById("ctx").value), by = +document.getElementById("kvt").value;
+  clear(memSvg);
+  const model = 10562.9 * 2 ** 20, rs = 62.81 * 2 ** 20, cb = comp(ctx) * 2 ** 20, freeB = 14945 * 2 ** 20;
+  const rows = [["Qwen3.5 (10 attention layers, 2 KV heads), cache + DeltaNet state", KVPT(10, 2, by) * ctx + rs], ["if all 40 layers were attention", KVPT(40, 2, by) * ctx], ["…and without GQA (16 KV heads)", KVPT(40, 16, by) * ctx]];
+  const scale = 900 / (24 * 2 ** 30);
+  rows.forEach(([n, cache], k) => {
+    const y = 20 + k * 64, tot = model + cache + cb;
+    S("text", { x: 0, y: y + 12, "font-size": 12, text: n }, memSvg);
+    S("text", { x: 940, y: y + 12, "text-anchor": "end", "font-size": 12, cls: tot > freeB ? "t-mono t-cut" : "t-mono t-keep", text: `${fmtB(cache)} · total ${fmtB(tot)} ${tot > freeB ? "does not fit" : "fits"}` }, memSvg);
+    S("rect", { x: 0, y: y + 20, width: Math.min(940, model * scale), height: 22, cls: "f-ink3" }, memSvg);
+    S("rect", { x: model * scale, y: y + 20, width: Math.max(1, Math.min(940 - model * scale, cache * scale)), height: 22, cls: "f-h" }, memSvg);
+  });
+  const fx = freeB * scale;
+  S("line", { x1: fx, x2: fx, y1: 30, y2: 210, stroke: "var(--cut)", "stroke-dasharray": "5 4" }, memSvg);
+  S("text", { x: fx + 4, y: 222, "font-size": 11, cls: "t-cut", text: "14.6 GiB free on a 16 GB card" }, memSvg);
+  document.getElementById("ctx-out").textContent = `${ctx.toLocaleString()} tokens ≈ ${Math.round(ctx / 1.3).toLocaleString()} English words`;
+}
+["ctx", "kvt"].forEach((id) => document.getElementById(id).addEventListener("input", tryRender));
+tryRender();
+</script>
+</body>
+</html>

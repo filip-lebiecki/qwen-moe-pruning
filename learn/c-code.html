@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pipeline Code Tour</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+<style>
+  .tour { display: grid; grid-template-columns: minmax(0, 400px) minmax(0, 1fr); border-bottom: 1px solid var(--line); }
+  @media (max-width: 860px) { .tour { grid-template-columns: minmax(0, 1fr); } }
+  .tour .diagram { border-right: 1px solid var(--line); min-width: 0; }
+  @media (max-width: 860px) { .tour .diagram { border-right: 0; border-bottom: 1px solid var(--line); } }
+  .tour .diagram svg { display: block; width: 100%; height: auto; }
+  .codepane { padding: 16px 18px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+  .codepane .file { font: 600 0.82rem/1.2 var(--f-mono); color: var(--h); }
+  .codepane pre { margin: 0; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font: 400 0.8rem/1.55 var(--f-mono); white-space: pre; }
+  .codepane .c { color: var(--ink3); }
+  .codepane .hl { background: var(--act-soft); display: inline-block; min-width: 100%; }
+  .bugs { display: grid; gap: 18px; }
+  .bug { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; display: grid; gap: 10px; min-width: 0; }
+  .bug .sym { font: 600 0.75rem/1 var(--f-mono); letter-spacing: 0.07em; text-transform: uppercase; color: var(--cut); }
+  .bug p { margin: 0; max-width: 72ch; }
+  .bug .chart { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+  .bug .chart svg { display: block; width: 100%; height: auto; min-width: 560px; }
+  .bug pre { margin: 0; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font: 400 0.8rem/1.5 var(--f-mono); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Appendix C</div>
+    <h1>Code tour and debugging</h1>
+    <p class="lede">How the scripts fit together, the few lines in each that do the real work, and the four bugs that cost
+      the most time, with the numbers from the logs. Read this with the <code>scripts/</code> folder open next to it.</p>
+  </header>
+
+  <section class="bench" aria-label="Code tour">
+    <div class="tour">
+      <div class="diagram" id="diagram"></div>
+      <div class="codepane"><span class="file" id="file"></span><pre id="code"></pre><span class="note" id="codenote"></span></div>
+    </div>
+    <div id="story"></div>
+  </section>
+
+  <section class="bugs" aria-labelledby="bugs">
+    <h2 id="bugs">Four bugs, with the logged numbers</h2>
+
+    <div class="bug">
+      <span class="sym">Bug 1 · 58 GB "allocated" on a 16 GB GPU</span>
+      <h3>Autograd kept every micro-batch alive</h3>
+      <p>The first statistics pass crashed in layer 0 with "58.64 GiB is allocated by PyTorch". Weights loaded with
+        <code>load_state_dict(..., assign=True)</code> keep <code>requires_grad=True</code>, and <code>run_layer</code> was not
+        inside <code>torch.no_grad()</code>, so PyTorch recorded a backward graph for every micro-batch and kept all their
+        activations. On Windows the excess silently spilled into system RAM, which is why the number could exceed the GPU.</p>
+      <pre>layer.requires_grad_(False)   # build_layer(): inference only
+@torch.no_grad()              # on Streamer.run_layer / embed / nll</pre>
+    </div>
+
+    <div class="bug">
+      <span class="sym">Bug 2 · memory grows 1.8 GB per layer</span>
+      <h3>A reference cycle kept every layer on the GPU</h3>
+      <p><code>layer.mlp.forward = lambda x, mlp=layer.mlp: …</code> stores a function on the module that refers back to the
+        module. Reference counting can never free such a cycle, so each 1.7 GB layer stayed on the GPU until Python's cycle
+        collector happened to run. The healing run's peak memory, as logged, then the fixed run:</p>
+      <div class="chart" id="leak"></div>
+      <pre>ref = weakref.ref(layer.mlp)                       # patch_moe() in moe_stream.py
+layer.mlp.forward = lambda x: moe_forward(ref(), x, stats)</pre>
+    </div>
+
+    <div class="bug">
+      <span class="sym">Bug 3 · no error, just 30x slower</span>
+      <h3>WSL/Windows spills VRAM into system RAM instead of failing</h3>
+      <p>While bug 2 was still present, the run-1 statistics pass did not crash: whenever memory went past 16 GB the Windows
+        driver quietly backed it with system RAM over PCIe ("sysmem fallback"), and some layers took 145 s instead of 5 s.
+        The evidence: the GPU sat at 15.9 of 16 GB and 100% busy while the disk was idle (5.2 GB/s uncached when tested). Capping PyTorch below the physical VRAM turns that slowdown into a clear error,
+        and after the fix every layer takes about 4–5 s. Seconds per layer, run 1 against run 2:</p>
+      <div class="chart" id="speed"></div>
+      <pre>os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+torch.cuda.set_per_process_memory_fraction(0.85)   # VRAM_FRACTION, in Streamer()</pre>
+    </div>
+
+    <div class="bug">
+      <span class="sym">Bug 4 · the same model, two different answers</span>
+      <h3>GPU atomic additions made every run slightly different</h3>
+      <p>Step 5 measured the unchanged model twice as a control, and the two runs disagreed by up to 0.15% perplexity per
+        domain (geometry +0.147%, physics −0.046%), more than deleting one expert changed. <code>moe_forward</code> added each
+        token's 8 expert outputs with <code>index_add_</code>, which on a GPU uses atomic additions: threads add into the
+        same memory in whatever order they finish, and in bf16 the rounding depends on the order. 40 layers amplify a
+        last-bit difference into a measurable one. Nothing crashed and every earlier result was "right" to within that
+        noise, which is why it went unnoticed until an experiment needed more precision. After the fix the repeat run
+        matched to the last bit (0.0000% on every domain).</p>
+      <pre>contrib = torch.empty_like(ys)
+contrib[order] = ys * weight[:, None]               # each (token, slot) back in its place
+out = contrib.view(-1, top_k, hidden).sum(dim=1)    # fixed order: bit-identical on every run</pre>
+    </div>
+  </section>
+
+  <section class="prose">
+    <h2>Three more habits that saved time</h2>
+    <p><b>Detach long jobs</b> with <code>setsid nohup … &gt; logs/x.log 2&gt;&amp;1 &amp;</code>. A statistics pass once died at
+      layer 10 because the terminal session ended. And <code>pkill -f pattern</code> kills your own shell if the pattern
+      appears in its command line; use <code>pkill -x llama-server</code> or a PID.</p>
+    <p><b>Check before you build on it.</b> The custom MoE forward was compared against the HF implementation on a real
+      layer, the on-disk checkpoint had to reproduce the virtual-pruning perplexity (5.915 vs 5.916), and the healing undo
+      was verified by comparing router rows with the original.</p>
+    <p><b>Measure the measurement.</b> Before trusting a small effect, run the unchanged thing twice and look at the
+      difference. That control found bug 4; the gradient check in step 3 is the same idea for training.</p>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+/* ---- data-flow diagram ---- */
+const NODES = [
+  ["file", "models/Qwen3.5-35B-A3B", "67 GiB teacher"],
+  ["script", "02_calib_data.py", ""],
+  ["file", "data/calib.pt · eval.pt", "524k + 131k tokens"],
+  ["script", "03_expert_stats.py", "uses moe_stream.py"],
+  ["file", "stats/calib.pt", "per-expert sums"],
+  ["script", "05_eval.py --stats --keep", "virtual prune"],
+  ["script", "04_prune.py", "slice + save"],
+  ["file", "models/q35-reap-k128", "36 GiB, 18.99 B"],
+  ["script", "06_heal.py (optional)", "in place"],
+  ["script", "07_gguf.sh", "convert · imatrix · quantize"],
+  ["file", "gguf/…-Q4_K_M.gguf", "11 GiB"],
+  ["script", "08_bench.py (step 2)", "GSM8K · HumanEval · MMLU"],
+  ["script", "10_distill.py (step 3)", "trains the routers"],
+];
+const dsv = svgRoot(document.getElementById("diagram"), 400, 700, "Scripts and the files they read and write");
+const NY = (k) => 16 + k * 52;
+const nodeEls = NODES.map(([kind, name, sub], k) => {
+  const g = S("g", {}, dsv);
+  const x = kind === "file" ? 40 : 84, w = kind === "file" ? 250 : 226;
+  const r = S("rect", { x, y: NY(k), width: w, height: 40, rx: kind === "file" ? 20 : 7, cls: kind === "file" ? "f-grid" : "box" }, g);
+  S("text", { x: x + 14, y: NY(k) + 18, "font-size": 12.5, "font-weight": kind === "script" ? 600 : 500, cls: kind === "file" ? "t-mono t-dim" : "t-mono", text: name }, g);
+  if (sub) S("text", { x: x + 14, y: NY(k) + 33, "font-size": 10.5, cls: "t-faint", text: sub }, g);
+  if (k) S("path", { d: `M24,${NY(k) - 12} V${NY(k) + 8}`, stroke: "var(--line)", "stroke-width": 2, fill: "none" }, g);
+  return r;
+});
+S("path", { d: `M24,${NY(0) + 20} V${NY(NODES.length - 1) + 20}`, stroke: "var(--line)", "stroke-width": 2, fill: "none" }, dsv);
+const ms = S("g", {}, dsv);
+S("rect", { x: 320, y: NY(3), width: 70, height: 196, rx: 7, cls: "f-h-soft" }, ms);
+["moe_", "stream", ".py", "", "Checkpoint", "Streamer", "moe_forward", "patch_moe"].forEach((t, k) =>
+  S("text", { x: 355, y: NY(3) + 20 + k * 21, "text-anchor": "middle", "font-size": k < 3 ? 11.5 : 9.5, "font-weight": k < 3 ? 600 : 400, cls: "t-mono t-h", text: t }, ms));
+
+/* ---- code excerpts (copied from the scripts) ---- */
+const TOUR = [
+  { node: 0, file: "scripts/moe_stream.py · Checkpoint", note: "safetensors can read single tensors from a shard, so one layer's weights load without touching the other 66 GiB.",
+    code: `def layer_state(self, i):
+    prefix = f"{TEXT}layers.{i}."
+    t = self.tensors([n for n in self.weight_map if n.startswith(prefix)])
+    return {n[len(prefix):]: v for n, v in t.items()}`, hl: [2] },
+  { node: 3, file: "scripts/moe_stream.py · Streamer.layers()", note: "A background thread reads layer i+1 from disk while layer i runs on the GPU (chapter 2).",
+    code: `with ThreadPoolExecutor(1) as pool:
+    fut = pool.submit(self.ckpt.layer_state, 0)
+    for i in range(self.ckpt.n_layers):
+        state = fut.result()
+        if i + 1 < self.ckpt.n_layers:
+            fut = pool.submit(self.ckpt.layer_state, i + 1)   # prefetch
+        if transform_state is not None:
+            state = transform_state(i, state)                # e.g. prune on the fly
+        layer = build_layer(self.ckpt.text_config, i, state, self.device)
+        yield i, layer`, hl: [5] },
+  { node: 3, file: "scripts/moe_stream.py · moe_forward()", note: "The router's five steps (chapter 4), then one dense matmul per expert over all tokens routed to it.",
+    code: `logits = F.linear(x, mlp.gate.weight)            # 1. score
+probs = logits.float().softmax(dim=-1)           # 2. softmax
+top_w, top_i = probs.topk(top_k, dim=-1)         # 3. top 8
+top_w = top_w / top_w.sum(dim=-1, keepdim=True)  # 4. renormalize
+
+for e, c in enumerate(counts):                   # 5. run each expert on its tokens
+    if c == 0:
+        continue
+    seg = slice(start, start + c)
+    g, u = F.linear(xs[seg], gate_up[e]).chunk(2, dim=-1)
+    ys[seg] = F.linear(F.silu(g) * u, down[e])
+    start += c`, hl: [0, 1, 2, 3] },
+  { node: 3, file: "scripts/moe_stream.py · statistics inside moe_forward()", note: "Everything chapters 6 and 7 need comes from these five sums, accumulated over 524k tokens per layer.",
+    code: `norm = ys.float().norm(dim=-1).double()           # ‖E_j(x)‖ per routed token
+w = weight.double()                                # g_j(x)
+stats.freq += torch.bincount(e_sorted, minlength=n_experts).double()
+stats.gate_sum.index_add_(0, e_sorted, w)
+stats.ean_sum.index_add_(0, e_sorted, norm)
+stats.reap_sum.index_add_(0, e_sorted, w * norm)   # REAP numerator
+stats.prob_sum += probs.sum(0).double()`, hl: [5] },
+  { node: 4, file: "scripts/moe_stream.py · expert_scores() / select_experts()", note: "REAP is the average of g·‖E‖ over the tokens an expert handled (chapter 6).",
+    code: `if criterion == "reap":
+    return stats["reap_sum"] / stats["freq"].clamp(min=1)
+
+def select_experts(stats, keep, criterion):
+    scores = expert_scores(stats, criterion)
+    return [row.topk(keep).indices.sort().values for row in scores]`, hl: [1] },
+  { node: 5, file: "scripts/05_eval.py · virtual pruning", note: "Prune while streaming, measure perplexity, write nothing. This is how K and criteria were compared cheaply.",
+    code: `keep = select_experts(torch.load(args.stats), args.keep, args.criterion)
+transform = lambda i, state: prune_layer_state(state, keep[i])
+
+def prune_layer_state(state, keep):          # moe_stream.py
+    state = dict(state)
+    for name in EXPERT_TENSORS:              # gate_up_proj, down_proj, gate.weight
+        state[name] = state[name][keep].contiguous()
+    return state`, hl: [6] },
+  { node: 6, file: "scripts/04_prune.py", note: "The same slicing, saved one shard per layer, plus two config changes. Nothing else in the model is touched.",
+    code: `for i in range(ckpt.n_layers):
+    state = prune_layer_state(ckpt.layer_state(i), keep[i])
+    write(i, {f"{TEXT}layers.{i}.{k}": v for k, v in state.items()})
+
+config["text_config"]["num_experts"] = args.keep
+config["text_config"]["mtp_num_hidden_layers"] = 0   # MTP head dropped`, hl: [4] },
+  { node: 5, file: "scripts/moe_stream.py · Streamer.nll()", note: "Perplexity (chapter 8): cross-entropy of the real next token, in chunks so 248k-way logits fit in memory.",
+    code: `for n in range(N):
+    h = norm(self.hidden[n, :-1].to(self.device))
+    target = self.tokens[n, 1:].to(self.device).long()
+    for c in range(0, L - 1, chunk):
+        logits = F.linear(h[c:c + chunk], head).float()
+        s += F.cross_entropy(logits, target[c:c + chunk], reduction="sum").item()`, hl: [5] },
+  { node: 8, file: "scripts/06_heal.py · train_block()", note: "Only the router rows (and the shared-expert gate) are trained, against the teacher's MoE output. It did not help (chapter 9).",
+    code: `params = [mlp.gate.weight, mlp.shared_expert_gate.weight]
+...
+with torch.autocast("cuda", dtype=torch.bfloat16):
+    loss = rel_err(moe_forward(mlp, u[j]), target[j])
+opt.zero_grad(set_to_none=True)
+loss.backward()
+opt.step()`, hl: [0] },
+  { node: 9, file: "scripts/07_gguf.sh", note: "llama.cpp does the rest (chapters 10 and 11).",
+    code: `$PY llama.cpp/convert_hf_to_gguf.py "$SRC" --outtype bf16 --no-mtp --outfile "$BF16"
+
+$BIN/llama-imatrix -m "$BF16" -f "$OUT/imatrix-calib.txt" -o "$OUT/imatrix.gguf" \\
+    -c 1024 --chunks 256 --parse-special --fit on
+
+$BIN/llama-quantize --imatrix "$OUT/imatrix.gguf" "$BF16" "$OUT/$NAME-$Q.gguf" "$Q"`, hl: [0, 2, 5] },
+  { node: 11, file: "scripts/08_bench.py · humaneval_grade()", note: "Grading by running the code: the prompt (imports, helpers), the model's function, the hidden tests, in a separate process (appendix E).",
+    code: `program = f"{item['src']}\\n    pass\\n\\n{m.group(1)}\\n\\n{item['test']}\\ncheck({item['entry']})\\n"
+with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+    f.write(program)
+r = subprocess.run([sys.executable, "-I", f.name], capture_output=True, text=True, timeout=10)
+ok = r.returncode == 0`, hl: [0, 3] },
+  { node: 12, file: "scripts/10_distill.py · Student.backward()", note: "The streamed backward pass (appendix F): reload each layer in reverse, recompute it from the saved input, push the gradient back, keep the router's gradient.",
+    code: `for i, layer in self.layers(reversed(range(self.ckpt.n_layers)), train=True):
+    g_in = torch.empty_like(grad)
+    for b in self.slices(len(grad)):
+        x = acts[i][b].to(self.device).requires_grad_(True)
+        pe, pos = self.rope(x)
+        out = layer(x, position_embeddings=pe, attention_mask=None, position_ids=pos)
+        out.backward(grad[b].to(self.device, out.dtype))
+        g_in[b] = x.grad.float().cpu()
+    g_gate[i] = layer.mlp.gate.weight.grad.float()
+    grad = g_in`, hl: [5, 6, 8] },
+];
+function renderCode(t) {
+  const pre = document.getElementById("code"); clear(pre);
+  t.code.split("\n").forEach((line, k) => {
+    const m = line.match(/^(.*?)(\s+#.*)?$/);
+    const span = H("span", { cls: t.hl.includes(k) ? "hl" : "" }, pre);
+    span.appendChild(document.createTextNode(m[1]));
+    if (m[2]) H("span", { cls: "c", text: m[2] }, span);
+    pre.appendChild(document.createTextNode("\n"));
+  });
+  document.getElementById("file").textContent = t.file;
+  document.getElementById("codenote").textContent = t.note;
+}
+const steps = TOUR.map((t) => ({ title: t.file.split(" · ").pop(), text: t.note, ms: 7000 }));
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    renderCode(TOUR[i]);
+    nodeEls.forEach((r, k) => { r.style.stroke = k === TOUR[i].node ? "var(--act)" : ""; r.style.strokeWidth = k === TOUR[i].node ? 2.4 : ""; });
+  },
+});
+
+/* ---- charts with logged numbers ---- */
+function lineChart(el, series, { ymax, ylab, xlab, cap }) {
+  const sv = svgRoot(el, 760, 240, ylab);
+  const B = { x: 56, y: 16, w: 670, h: 180 };
+  S("path", { d: `M${B.x},${B.y} V${B.y + B.h} H${B.x + B.w}`, cls: "wire" }, sv);
+  for (let v = 0; v <= ymax; v += ymax / 4) {
+    const y = B.y + B.h - (v / ymax) * B.h;
+    S("line", { x1: B.x, x2: B.x + B.w, y1: y, y2: y, stroke: "var(--grid)" }, sv);
+    S("text", { x: B.x - 8, y: y + 4, "text-anchor": "end", "font-size": 10.5, cls: "t-faint t-mono", text: Math.round(v) }, sv);
+  }
+  for (let l = 0; l < 40; l += 5) S("text", { x: B.x + (l / 39) * B.w, y: B.y + B.h + 16, "text-anchor": "middle", "font-size": 10.5, cls: "t-faint t-mono", text: l }, sv);
+  S("text", { x: B.x + B.w, y: B.y + B.h + 32, "text-anchor": "end", "font-size": 11, cls: "t-dim", text: xlab }, sv);
+  S("text", { x: B.x, y: B.y - 4, "font-size": 11, cls: "t-dim", text: ylab }, sv);
+  if (cap) {
+    const y = B.y + B.h - (cap.v / ymax) * B.h;
+    S("line", { x1: B.x, x2: B.x + B.w, y1: y, y2: y, stroke: "var(--cut)", "stroke-dasharray": "5 4" }, sv);
+    S("text", { x: B.x + B.w - 4, y: y - 5, "text-anchor": "end", "font-size": 11, cls: "t-cut", text: cap.label }, sv);
+  }
+  const X = (l) => B.x + (l / 39) * B.w, Y = (v) => B.y + B.h - (Math.min(v, ymax) / ymax) * B.h;
+  series.forEach((s, k) => {
+    if (s.bars) {
+      const bw = B.w / 40 / series.length;
+      s.data.forEach((v, l) => S("rect", { x: X(l) - (B.w / 80) + k * bw + 1, y: Y(v), width: bw - 1.5, height: B.y + B.h - Y(v), rx: 1.5, fill: s.color }, sv));
+    } else {
+      const d = s.data.map((v, l) => `${l ? "L" : "M"}${X(l)},${Y(v)}`).join(" ");
+      S("path", { d, fill: "none", stroke: s.color, "stroke-width": 2.4 }, sv);
+      s.data.forEach((v, l) => S("circle", { cx: X(l), cy: Y(v), r: 3, fill: s.color }, sv));
+      if (s.end) S("text", { x: X(s.data.length - 1) + 8, y: Y(s.data[s.data.length - 1]) + 4, "font-size": 11.5, "font-weight": 600, fill: s.color, text: s.end }, sv);
+    }
+    S("rect", { x: B.x + 10 + k * 230, y: B.y + 8, width: 12, height: 12, rx: 3, fill: s.color }, sv);
+    S("text", { x: B.x + 28 + k * 230, y: B.y + 18, "font-size": 11.5, cls: "t-dim", text: s.name }, sv);
+  });
+}
+lineChart(document.getElementById("leak"), [
+  { name: "with the cycle (healing, run 1)", data: [4.1, 5.9, 7.7, 9.5, 11.3, 13.1], color: "var(--cut)", end: "OOM at layer 6" },
+  { name: "with patch_moe (weakref)", data: new Array(40).fill(4.1), color: "var(--keep)" },
+], { ymax: 16, ylab: "peak GPU memory per layer (GiB)", xlab: "layer", cap: { v: 13.5, label: "cap: 13.5 GiB allowed (85%)" } });
+const RUN1 = [7, 6, 5, 5, 5, 5, 5, 4, 5, 5, 9, 30, 56, 145, 34, 4, 5, 3, 5, 4, 5, 5, 18, 40, 3, 6, 6, 4, 5, 6, 4, 5, 59, 67, 54, 79, 59, 134, 133, 85];
+const RUN2 = [21, 5, 5, 3, 5, 5, 5, 4, 5, 5, 4, 4, 5, 5, 4, 4, 5, 3, 5, 4, 4, 4, 5, 4, 3, 5, 4, 4, 5, 4, 5, 4, 3, 5, 4, 4, 4, 5, 4, 3];
+const sum = (a) => a.reduce((x, y) => x + y, 0);
+lineChart(document.getElementById("speed"), [
+  { name: `run 1, before fixes: ${Math.round(sum(RUN1) / 60)} min total`, data: RUN1, color: "var(--cut)", bars: true },
+  { name: `run 2, fixed: ${Math.round(sum(RUN2) / 6) / 10} min total`, data: RUN2, color: "var(--keep)", bars: true },
+], { ymax: 160, ylab: "seconds per layer, statistics pass", xlab: "layer (run 2 layer 0 includes kernel compilation)" });
+</script>
+</body>
+</html>

@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Perplexity Explained</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="common.css">
+<style>
+  .sliders { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 18px; }
+  .sliders label { display: grid; gap: 2px; font-size: 0.85rem; }
+  .sliders input { width: 100%; }
+  .sliders .mono { color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="chap">
+    <div class="crumbs" id="crumbs"></div>
+    <div class="eyebrow">Chapter 8</div>
+    <h1>Perplexity: how we measure damage</h1>
+    <p class="lede">Perplexity asks how surprised the model is by real text. At every position we look at the probability
+      it gave to the token that actually came next. Everything here uses real probabilities from your pruned 19B model.</p>
+  </header>
+
+  <section class="bench" aria-label="Animation">
+    <div class="stage" id="stage"></div>
+    <div id="story"></div>
+  </section>
+
+  <section class="tryit" aria-labelledby="try8">
+    <h2 id="try8">Try it: change the model's confidence</h2>
+    <div class="row">
+      <span class="readout" id="ppl-out"></span>
+      <button class="btn" id="reset" type="button">Reset to the real model</button>
+      <button class="btn" id="sure" type="button">Make it 90% sure everywhere</button>
+    </div>
+    <div class="sliders" id="sliders"></div>
+    <p class="note">Each slider is the probability of the correct next token at one position (log scale). One very
+      surprising token, like "␣capital" right after "The", raises the average a lot. That is why perplexity punishes
+      confident mistakes and rare words.</p>
+  </section>
+
+  <section class="prose">
+    <h2>What to remember</h2>
+    <p><code>loss = average of −ln(probability of the correct next token)</code> and <code>perplexity = e^loss</code>.
+      A perplexity of 5 means the model is, on average, as uncertain as if it were picking uniformly among 5 tokens.
+      Lower is better.</p>
+    <p>We always measure on held-out text (<code>data/eval.pt</code>) that was never used for calibration, split by domain.
+      Perplexity is quick and objective, but it is not the same as answer quality: always test real prompts too
+      (<code>scripts/ask.py</code>). In our runs +20% (K=128) still answered everything correctly, +140% (K=48) produced
+      broken code and repetition loops.</p>
+  </section>
+
+  <section class="facts" aria-label="In this project">
+    <div class="fact"><span class="k">Original</span><span class="v">4.92</span><span class="n">all domains, 131k eval tokens</span></div>
+    <div class="fact"><span class="k">REAP K=128</span><span class="v">5.92 (+20%)</span><span class="n">usable</span></div>
+    <div class="fact"><span class="k">REAP K=48</span><span class="v">11.7 (+138%)</span><span class="n">broken</span></div>
+    <div class="fact"><span class="k">In the code</span><span class="v">Streamer.nll()</span><span class="n">05_eval.py, ppl_report()</span></div>
+  </section>
+
+  <div id="pager"></div>
+</div>
+
+<script src="quiz.js"></script>
+<script src="common.js"></script>
+<script>
+"use strict";
+buildCrumbs(document.getElementById("crumbs"));
+buildPager(document.getElementById("pager"));
+
+/* real next-token probabilities from gguf/q35-reap-k128 Q4_K_M (llama-server, greedy, no BOS) */
+const TOKS = ["The", " capital", " of", " Australia", " is", " Canberra", ",", " not", " Sydney", "."];
+const REAL = [
+  [0.00096, [[" following", 0.036], ["␣", 0.029], [" first", 0.01]]],
+  [0.4754, [[" of", 0.475], [" city", 0.187], ["ization", 0.026]]],
+  [0.0121, [[" the", 0.265], [" a", 0.023], [" India", 0.019]]],
+  [0.6675, [[" is", 0.668], [",", 0.154], [".", 0.026]]],
+  [0.6964, [[" Canberra", 0.696], [" a", 0.063], [" located", 0.026]]],
+  [0.3587, [[".", 0.573], [",", 0.359], [" and", 0.006]]],
+  [0.1241, [[" a", 0.215], [" which", 0.188], [" but", 0.148]]],
+  [0.8175, [[" Sydney", 0.817], [" Melbourne", 0.117], [" the", 0.017]]],
+  [0.4968, [[".", 0.497], [" or", 0.249], [",", 0.111]]],
+];
+const surprise = (p) => -Math.log(p);
+const pplOf = (ps) => Math.exp(ps.reduce((a, p) => a + surprise(p), 0) / ps.length);
+const vis = (s) => s.replace(/^ /, "␣");
+
+const W = 960, HH = 480;
+const svg = svgRoot(document.getElementById("stage"), W, HH, "Per-token probabilities, surprise and perplexity");
+const CW = 90, X0 = 26;
+const cx = (k) => X0 + k * CW + CW / 2;
+
+/* token row */
+const chips = TOKS.map((t, k) => {
+  const g = S("g", { cls: "fade" }, svg);
+  const r = S("rect", { x: X0 + k * CW + 4, y: 26, width: CW - 8, height: 32, rx: 6, cls: "f-h-soft" }, g);
+  S("text", { x: cx(k), y: 47, "text-anchor": "middle", "font-size": 13.5, cls: "t-mono", text: vis(t) }, g);
+  return { g, r };
+});
+const cursor = S("rect", { x: 0, y: 22, width: CW, height: 40, rx: 8, fill: "none", stroke: "var(--act)", "stroke-width": 2.2, cls: "fade hide" }, svg);
+
+/* per-token panels */
+const bars = S("g", { cls: "fade" }, svg);
+S("text", { x: X0, y: 86, "font-size": 12, cls: "t-dim", text: "p(correct next token)" }, bars);
+S("text", { x: X0, y: 262, "font-size": 12, cls: "t-dim", text: "surprise = −ln p" }, bars);
+const PB = { y: 96, h: 120 }, SB = { y: 272, h: 112 };
+S("path", { d: `M${X0},${PB.y + PB.h} H${X0 + 10 * CW}`, cls: "wire" }, bars);
+S("path", { d: `M${X0},${SB.y} H${X0 + 10 * CW}`, cls: "wire" }, bars);
+const cols = REAL.map(([p, top], j) => {
+  const k = j + 1, x = cx(k);
+  const pr = S("rect", { x: x - 16, y: PB.y + PB.h, width: 32, height: 0, rx: 3, cls: "f-h" }, bars);
+  const pt = S("text", { x, y: PB.y + PB.h - 6, "text-anchor": "middle", "font-size": 11, cls: "t-mono fade hide", text: p < 0.01 ? p.toFixed(4) : p.toFixed(3) }, bars);
+  const sr = S("rect", { x: x - 16, y: SB.y, width: 32, height: 0, rx: 3, cls: "f-cut" }, bars);
+  const st = S("text", { x, y: SB.y + 14, "text-anchor": "middle", "font-size": 11, cls: "t-mono fade hide", text: surprise(p).toFixed(2) }, bars);
+  const tops = S("g", { cls: "fade hide" }, bars);
+  return { pr, pt, sr, st, tops, p, top };
+});
+/* guess box shown under the cursor */
+const guess = S("g", { cls: "fade hide" }, svg);
+const guessT = [0, 1, 2, 3].map((k) => S("text", { x: 0, y: 0, "font-size": 11.5, cls: k ? "t-mono t-dim" : "t-mono", text: "" }, guess));
+
+const summary = S("g", { cls: "fade hide" }, svg);
+const sumT = S("text", { x: X0, y: 420, "font-size": 15, cls: "t-mono", text: "" }, summary);
+const sumT2 = S("text", { x: X0, y: 448, "font-size": 15, "font-weight": 700, cls: "t-mono", text: "" }, summary);
+const sumT3 = S("text", { x: X0 + 520, y: 448, "font-size": 13, cls: "t-dim", text: "" }, summary);
+
+/* dice + results overlay */
+const ov = S("g", { cls: "fade hide" }, svg);
+S("rect", { x: X0, y: 76, width: 908, height: 390, rx: 8, cls: "box" }, ov);
+const diceG = S("g", {}, ov);
+S("text", { x: X0 + 20, y: 104, "font-size": 13, "font-weight": 600, text: "perplexity N ≈ picking among N equally likely tokens" }, diceG);
+[[1, "perfect"], [2.5, "reasoning text, original"], [4.92, "our eval mix, original"], [6.53, "this sentence"], [11.7, "K=48 model"]].forEach(([n, lab], k) => {
+  const y = 130 + k * 48;
+  S("text", { x: X0 + 20, y: y + 20, "font-size": 13, cls: "t-mono", "font-weight": 600, text: n.toFixed(2) }, diceG);
+  const full = Math.floor(n), frac = n - full;
+  for (let f = 0; f < Math.ceil(n); f++) {
+    const w = f < full ? 26 : 26 * frac;
+    S("rect", { x: X0 + 90 + f * 30, y, width: Math.max(w, 2), height: 26, rx: 5, cls: k === 4 ? "f-cut-soft" : "f-h-soft", stroke: k === 4 ? "var(--cut)" : "var(--h)" }, diceG);
+  }
+  S("text", { x: X0 + 90 + Math.ceil(n) * 30 + 8, y: y + 18, "font-size": 12, cls: "t-dim", text: lab }, diceG);
+});
+const resG = S("g", { cls: "fade hide" }, ov);
+S("text", { x: X0 + 20, y: 104, "font-size": 13, "font-weight": 600, text: "measured on the held-out eval set (05_eval.py)" }, resG);
+const RES = [["web", 8.465, 10.608, 24.79], ["chat", 4.031, 4.451, 8.335], ["think", 2.502, 2.605, 3.525], ["wikitext", 6.837, 9.961, 25.855], ["all", 4.915, 5.916, 11.715]];
+const RC = [["original", "f-keep"], ["K=128", "f-h"], ["K=48", "f-cut"]];
+const rb = [];
+const RY = 430, RH = 280, rs = (v) => (v / 27) * RH;
+RES.forEach(([dom, ...vals], d) => {
+  const gx = X0 + 70 + d * 170;
+  S("text", { x: gx + 50, y: RY + 20, "text-anchor": "middle", "font-size": 12.5, text: dom }, resG);
+  vals.forEach((v, m) => {
+    const x = gx + m * 34;
+    const b = S("rect", { x, y: RY, width: 28, height: 0, rx: 3, cls: RC[m][1] }, resG);
+    const t = S("text", { x: x + 14, y: RY - rs(v) - 5, "text-anchor": "middle", "font-size": 10.5, cls: "t-mono", text: v.toFixed(1) }, resG);
+    rb.push([b, v, t]);
+  });
+});
+S("path", { d: `M${X0 + 60},${RY} H${X0 + 900}`, cls: "wire" }, resG);
+RC.forEach(([n, c], m) => { S("rect", { x: X0 + 600 + m * 96, y: 92, width: 12, height: 12, rx: 3, cls: c }, resG); S("text", { x: X0 + 616 + m * 96, y: 103, "font-size": 12, cls: "t-dim", text: n }, resG); });
+
+function setCols(n, withSurprise) {
+  cols.forEach((c, j) => {
+    const on = j < n;
+    animAttrs(c.pr, { height: on ? c.p * PB.h : 0, y: PB.y + PB.h - (on ? c.p * PB.h : 0) }, 500);
+    show(c.pt, on);
+    c.pt.setAttribute("y", PB.y + PB.h - c.p * PB.h - 6);
+    const sh = on && withSurprise ? (surprise(c.p) / 7) * SB.h : 0;
+    animAttrs(c.sr, { height: sh }, 500);
+    show(c.st, on && withSurprise);
+    c.st.setAttribute("y", SB.y + sh + 14);
+  });
+}
+function setCursor(k) {
+  show(cursor, k !== null); show(guess, k !== null);
+  if (k === null) return;
+  cursor.setAttribute("x", X0 + k * CW);
+  const c = cols[k - 1];
+  guessT[0].textContent = `after "${TOKS.slice(0, k).join("")}" the real next token "${vis(TOKS[k])}" got p = ${c.p < 0.01 ? c.p.toFixed(4) : c.p.toFixed(3)}. Model's top guesses:`;
+  guessT[0].setAttribute("x", X0); guessT[0].setAttribute("y", 422);
+  c.top.forEach(([t, p], j) => {
+    guessT[j + 1].textContent = `${vis(t)} ${p.toFixed(3)}`;
+    guessT[j + 1].setAttribute("x", X0 + j * 170); guessT[j + 1].setAttribute("y", 448);
+  });
+}
+
+let player = null;
+function stop() { if (player) { clearInterval(player); player = null; } }
+const steps = [
+  { title: "The model's job: predict the next token", text: "At every position the model gives a probability to all 248,077 possible next tokens. We check the one that actually came next." },
+  { title: "Position by position", text: "After \"The\", the real next token \"␣capital\" got only 0.001; the model expected \"␣following\" or \"␣first\". After \"The capital of Australia is\", it gave \"␣Canberra\" 0.70.", ms: 9500 },
+  { title: "Turn probabilities into surprise", text: "Surprise is −ln p. A sure prediction (p near 1) costs almost nothing; \"␣capital\" at p = 0.001 costs 6.95. Note how \"␣not\" is surprising too: the model expected the sentence to end." },
+  { title: "Average surprise, then e to the power", text: "The average surprise over these 9 predictions is the loss. Perplexity = e^loss." },
+  { title: "What the number means", text: "Perplexity N is as uncertain as choosing uniformly among N tokens. Our whole eval mix gives the original model 4.92." },
+  { title: "Measure the damage on held-out text", text: "Same eval set, three models. K=128 costs 20% overall; K=48 costs 138%, and web and wikitext get 2.9x and 3.8x worse while reasoning text holds up.", ms: 7000 },
+];
+
+new Story({
+  mount: document.getElementById("story"),
+  steps,
+  render(i) {
+    stop();
+    show(bars, i <= 3); show(ov, i >= 4); show(diceG, i === 4); show(resG, i === 5);
+    show(summary, i === 3);
+    chips.forEach((c) => show(c.g, i <= 3));
+    setCursor(null);
+    rb.forEach(([b, v, t]) => { animAttrs(b, { height: i === 5 ? rs(v) : 0, y: RY - (i === 5 ? rs(v) : 0) }, 900); show(t, i === 5); });
+    if (i === 0) { setCols(0, false); setCursor(1); }
+    if (i === 1) {
+      let k = 1; setCols(1, false); setCursor(1);
+      player = setInterval(() => { k++; if (k > 9) { stop(); setCursor(null); return; } setCols(k, false); setCursor(k); }, 950);
+    }
+    if (i === 2) setCols(9, true);
+    if (i === 3) {
+      setCols(9, true);
+      const ps = REAL.map(([p]) => p), loss = ps.reduce((a, p) => a + surprise(p), 0) / ps.length;
+      sumT.textContent = `loss = (${ps.map((p) => surprise(p).toFixed(2)).join(" + ")}) / 9 = ${loss.toFixed(3)}`;
+      sumT2.textContent = `perplexity = e^${loss.toFixed(3)} = ${Math.exp(loss).toFixed(2)}`;
+      sumT3.textContent = "as unsure as picking among ~6.5 tokens";
+    }
+  },
+});
+
+/* try it: sliders */
+const box = document.getElementById("sliders");
+const probs = REAL.map(([p]) => p);
+const inputs = REAL.map(([p], j) => {
+  const lab = H("label", { for: `p${j}` }, box);
+  H("span", { cls: "mono", text: `${TOKS.slice(0, j + 1).join("").slice(-18)} → ${vis(TOKS[j + 1])}` }, lab);
+  const inp = H("input", { type: "range", id: `p${j}`, min: -7, max: 0, step: 0.01, value: Math.log10(p) }, lab);
+  const out = H("span", { cls: "mono note", text: "" }, lab);
+  inp.addEventListener("input", () => { probs[j] = Math.pow(10, +inp.value); redraw(); });
+  return { inp, out };
+});
+function redraw() {
+  inputs.forEach(({ out }, j) => (out.textContent = `p = ${probs[j] < 0.01 ? probs[j].toExponential(1) : probs[j].toFixed(3)} · surprise ${surprise(probs[j]).toFixed(2)}`));
+  document.getElementById("ppl-out").textContent = `perplexity = ${pplOf(probs).toFixed(2)}`;
+}
+document.getElementById("reset").addEventListener("click", () => { REAL.forEach(([p], j) => { probs[j] = p; inputs[j].inp.value = Math.log10(p); }); redraw(); });
+document.getElementById("sure").addEventListener("click", () => { probs.forEach((_, j) => { probs[j] = 0.9; inputs[j].inp.value = Math.log10(0.9); }); redraw(); });
+redraw();
+</script>
+</body>
+</html>
