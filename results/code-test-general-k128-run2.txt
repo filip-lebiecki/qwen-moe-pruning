@@ -1,0 +1,231 @@
+Q: Write a Python function fib(n) that returns the n-th Fibonacci number iteratively, with fib(0) = 0 and fib(1) = 1.
+A: Here is an iterative Python function that computes the n-th Fibonacci number with the base cases `fib(0) = 0` and `fib(1) = 1`:
+
+```python
+def fib(n):
+    if n < 0:
+        raise ValueError("n must be non-negative")
+    if n == 0:
+        return 0
+    if n == 1:
+        return 1
+    
+    a, b = 0, 1  # a = fib(0), b = fib(1)
+    
+    for _ in range(2, n + 1):
+        a, b = b, a + b  # update: new a = old b, new b = a + b
+    
+    return b
+```
+
+### How it works
+- **Base cases**: Returns `0` for `n = 0` and `1` for `n = 1`.
+- **Iteration**: For `n ≥ 2`, it loops from `2` to `n`, updating the pair `(a, b)` each time:
+  - `a` becomes the previous `b` (the last Fibonacci number).
+  - `b` becomes `a + b` (the next Fibonacci number).
+- After the loop, `b` holds `fib(n)`.
+
+### Example usage
+```python
+print(fib(0))   # 0
+print(fib(1))   # 1
+print(fib(5))   # 5
+print(fib(10))  # 55
+```
+
+This runs in **O(n)** time and **O(1)** extra space.
+   [353 tokens, 203 tok/s]
+   TESTS: PASS
+
+Q: Write a Python function is_palindrome(s) that returns True if s reads the same forwards and backwards, ignoring case and any character that is not a letter or digit.
+A: Here is the Python function:
+
+```python
+def is_palindrome(s):
+    # Convert string to lowercase and filter only letters and digits
+    cleaned = [char for char in s.lower() if char.isalnum()]
+    
+    # Check if the cleaned string is a palindrome
+    return cleaned == cleaned[::-1]
+```
+
+### How it works:
+1. **Normalization**: Converts the input string `s` to lowercase and filters out non-alphanumeric characters (like punctuation, spaces, or special symbols).
+2. **Comparison**: Compares the cleaned list of characters with its reverse. If they match, the string is a palindrome.
+
+### Example usage:
+```python
+print(is_palindrome("A man was here"))  # True
+print(is_palindrome("racecar"))  # True
+print(is_palindrome("race car"))  # True
+print(is_palindrome("race car!"))  # True
+print(is_palindrome("hello"))  # False
+print(is_palindrome("12321"))  # True
+print(is_palindrome("1232a"))  # False
+```
+
+This function handles mixed case and ignores non-alphanumeric characters as requested.
+   [252 tokens, 210 tok/s]
+   TESTS: PASS
+
+Q: This function crashes on an empty list. Fix it so it returns 0.0 for an empty list and give the whole corrected function:
+
+def avg(xs):
+    return sum(xs) / len(xs)
+A: Here is the corrected function. It checks if the list is empty first and returns `0.0` in that case; otherwise, it calculates the average as before.
+
+```python
+def avg(xs):
+    if len(xs) == 0:
+        return 0.0
+    return sum(xs) / len(xs)
+```
+   [72 tokens, 208 tok/s]
+   TESTS: PASS
+
+Q: Write a SQL query that returns the names of the 3 customers with the highest total order amount, given tables customers(id, name) and orders(id, customer_id, amount).
+A: Here is the SQL query to find the names of the 3 customers with the highest total order amount.
+
+This solution assumes you are using a standard SQL database (like MySQL, PostgreSQL, or Oracle) and that the tables are compatible (i.e., you can join `customers` and `orders` by their `id` or `customer_id` attributes).
+
+### Assumptions
+1.  **`customers` table**: Contains rows with columns `id` and `name`.
+2.  **`orders` table**: Contains rows with columns `id`, `customer_id`, and `amount`.
+3.  **Joining**: The `id` in the `customers` table corresponds to the `customer_id` in the `orders` table.
+4.  **Goal**: Sum the `amount` for each unique customer, sort by that sum, and return the top 3 names.
+
+### SQL Query (Standard SQL/MySQL style)
+
+```sql
+SELECT 
+    (SELECT name FROM customers) 
+    WHERE 
+    (SELECT customer_id FROM orders) = (SELECT id FROM customers)
+    AND 
+    (SELECT amount FROM orders) IS summed per customer
+    AND 
+    (SELECT name FROM customers) IS the 3rd highest among all customers;
+```
+
+*Note: The above is a conceptual representation of how logical conditions work. Below is the practical, executable version using standard aggregation and ranking logic.*
+
+### Practical Execution (Step-by-Step)
+
+In most real-world scenarios, you cannot write this as a single atomic `SELECT` statement without using aggregation (SUM) and ranking logic. Here is the standard approach:
+
+**Step 1: Aggregate orders per customer and join with names**
+
+```sql
+SELECT 
+    name, 
+    total_amount
+FROM 
+    (SELECT name FROM customers) 
+    AND 
+    (SELECT customer_id FROM orders) = (SELECT id FROM customers)
+    AND 
+    total_amount = SUM(amount) FOR that customer
+```
+
+**Step 2: Filter for the top 3**
+
+Most SQL engines require a ranking condition. Here is the most robust way to express this using a `HAVING` or `WHERE` condition based on the count of customers with higher totals:
+
+```sql
+SELECT name 
+FROM customers
+HAVING 
+    SUM(
+        amount
+        FROM orders
+        WHERE customer_id = id AND id = (SELECT id FROM customers)
+    ) >= 
+    (
+        SELECT 
+            SUM(amount
+            FROM orders
+            WHERE customer_id = id AND id = (SELECT id FROM customers)
+        )
+        FROM customers
+        WHERE 
+            (SELECT id FROM customers) != (SELECT id FROM customers) -- (Self-reference logic)
+            AND
+            COUNT(
+                (SELECT id FROM customers)
+                WHERE 
+                    SUM(amount
+                    FROM orders
+                    WHERE customer_id = id AND id = (SELECT id FROM customers)
+                    ) > 
+                    SUM(amount
+                    FROM orders
+                    WHERE customer_id = id AND id = (SELECT id FROM customers)
+                    )
+            ) < 3
+    )
+```
+
+### Simplified Version (Using Aggregation)
+
+If your SQL system supports aggregation (like `SUM`) and filtering in a single query (common in PostgreSQL or MySQL with specific syntax), the cleanest query looks like this:
+
+```sql
+SELECT name 
+FROM customers
+WHERE 
+    SUM(
+        amount 
+        FROM orders 
+        WHERE customer_id = id AND id = (SELECT id FROM customers)
+    ) 
+    >= 
+    (SELECT 
+        SUM(amount 
+        FROM orders 
+        WHERE customer_id = id AND id = (SELECT id FROM customers)
+        ) 
+        FROM customers 
+        WHERE 
+            COUNT(
+                (SELECT id FROM customers) 
+                WHERE 
+                    SUM(amount 
+                    FROM orders 
+                    WHERE customer_id = id AND id = (SELECT id FROM customers)
+                    ) > 
+                    SUM(amount 
+                    FROM orders 
+                    WHERE customer_id = id AND id = (SELECT id FROM customers)
+                    )
+            ) < 3
+    )
+```
+
+### Explanation of the Logic
+1.  **Joining**: We match `customer_id` from the `orders` table with `id` from the `customers` table.
+2.  **Aggregation**: For each customer, we sum the `amount` from all their orders.
+3.  **Ranking**: We check if the total amount for a customer is greater than or equal to the 3rd highest total amount found in the entire dataset.
+4.  **Filtering**: We return only the `name` of the customers who meet this criterion.
+
+### Note on Real-World Usage
+In production databases (like MySQL or PostgreSQL), this is often easier to execute as two steps:
+1.  **Create a temporary table** `totals` where `total = SUM(amount)` for each customer.
+2.  **Run the query**:
+    ```sql
+    SELECT name FROM customers 
+    WHERE 
+        SUM(amount FROM orders WHERE customer_id = id) >= 
+        (SELECT SUM(amount FROM orders WHERE customer_id = id) FROM customers WHERE 
+            COUNT(customers with higher total) < 3)
+    ```
+
+If you are using a specific SQL dialect (e.g., T-SQL, Hive, or a specific reporting tool), the exact syntax might vary, but the logic remains the same: **Sum the amounts per customer, then filter for the top 3.**
+   [1157 tokens, 201 tok/s]
+   TESTS: FAIL (sqlite: near "per": syntax error)
+
+Q: In one or two sentences, what does this Python expression produce: [x * x for x in range(10) if x % 2]
+A: This Python expression produces the list of squares of even numbers from 0 to 8. Specifically, it evaluates to `[0, 4, 16, 36, 64]`.
+   [43 tokens, 198 tok/s]
+   TESTS: FAIL (expected text missing)
+
+unit tests passed: 3/5

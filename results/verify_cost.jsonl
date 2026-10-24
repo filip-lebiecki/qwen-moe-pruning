@@ -1,0 +1,10 @@
+{"model": "Qwen3.5-2B-Q4_K_M.gguf", "tokens": 1, "ms": 2.951}
+{"model": "Qwen3.5-2B-Q4_K_M.gguf", "tokens": 2, "ms": 3.038}
+{"model": "Qwen3.5-2B-Q4_K_M.gguf", "tokens": 4, "ms": 3.277}
+{"model": "Qwen3.5-2B-Q4_K_M.gguf", "tokens": 8, "ms": 4.098}
+{"model": "Qwen3.5-2B-Q4_K_M.gguf", "tokens": 16, "ms": 4.259}
+{"model": "q35-reap-k128-Q4_K_M.gguf", "tokens": 1, "ms": 5.259}
+{"model": "q35-reap-k128-Q4_K_M.gguf", "tokens": 2, "ms": 5.965}
+{"model": "q35-reap-k128-Q4_K_M.gguf", "tokens": 4, "ms": 7.289}
+{"model": "q35-reap-k128-Q4_K_M.gguf", "tokens": 8, "ms": 9.747}
+{"model": "q35-reap-k128-Q4_K_M.gguf", "tokens": 16, "ms": 13.458}

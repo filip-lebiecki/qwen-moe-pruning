@@ -1,0 +1,482 @@
+[
+ {
+  "team": "biology x4",
+  "per_layer": 4,
+  "share_of_picks_pct": {
+   "biology": 14.9,
+   "chemistry": 4.4,
+   "physics": 4.37,
+   "algebra": 0.5,
+   "geometry": 0.28,
+   "number_theory": 0.33,
+   "code": 0.95,
+   "web": 5.76
+  },
+  "ppl_change_pct": {
+   "biology": 30.927,
+   "chemistry": 4.02,
+   "physics": 0.929,
+   "algebra": 0.041,
+   "geometry": 0.028,
+   "number_theory": -0.204,
+   "code": -0.215,
+   "web": 1.078
+  }
+ },
+ {
+  "team": "chemistry x4",
+  "per_layer": 4,
+  "share_of_picks_pct": {
+   "biology": 3.93,
+   "chemistry": 10.35,
+   "physics": 5.41,
+   "algebra": 1.32,
+   "geometry": 0.93,
+   "number_theory": 1.01,
+   "code": 1.31,
+   "web": 1.08
+  },
+  "ppl_change_pct": {
+   "biology": 1.879,
+   "chemistry": 24.787,
+   "physics": 2.489,
+   "algebra": 0.309,
+   "geometry": 0.205,
+   "number_theory": -0.266,
+   "code": 0.097,
+   "web": 0.705
+  }
+ },
+ {
+  "team": "physics x4",
+  "per_layer": 4,
+  "share_of_picks_pct": {
+   "biology": 5.23,
+   "chemistry": 5.2,
+   "physics": 14.74,
+   "algebra": 0.44,
+   "geometry": 0.55,
+   "number_theory": 0.5,
+   "code": 0.98,
+   "web": 0.98
+  },
+  "ppl_change_pct": {
+   "biology": 1.827,
+   "chemistry": 4.569,
+   "physics": 51.384,
+   "algebra": -0.239,
+   "geometry": -0.146,
+   "number_theory": -0.107,
+   "code": -0.255,
+   "web": 0.118
+  }
+ },
+ {
+  "team": "algebra x4",
+  "per_layer": 4,
+  "share_of_picks_pct": {
+   "biology": 0.55,
+   "chemistry": 2.44,
+   "physics": 0.86,
+   "algebra": 11.45,
+   "geometry": 8.5,
+   "number_theory": 9.89,
+   "code": 1.43,
+   "web": 0.68
+  },
+  "ppl_change_pct": {
+   "biology": 0.413,
+   "chemistry": 0.704,
+   "physics": 0.583,
+   "algebra": 28.546,
+   "geometry": 18.253,
+   "number_theory": 14.408,
+   "code": 0.594,
+   "web": 0.172
+  }
+ },
+ {
+  "team": "geometry x4",
+  "per_layer": 4,
+  "share_of_picks_pct": {
+   "biology": 0.68,
+   "chemistry": 1.56,
+   "physics": 0.94,
+   "algebra": 6.93,
+   "geometry": 16.19,
+   "number_theory": 5.09,
+   "code": 1.92,
+   "web": 0.82
+  },
+  "ppl_change_pct": {
+   "biology": 0.79,
+   "chemistry": 0.495,
+   "physics": 0.16,
+   "algebra": 14.73,
+   "geometry": 47.147,
+   "number_theory": 7.683,
+   "code": 0.774,
+   "web": 0.302
+  }
+ },
+ {
+  "team": "number_theory x4",
+  "per_layer": 4,
+  "share_of_picks_pct": {
+   "biology": 0.34,
+   "chemistry": 1.65,
+   "physics": 0.62,
+   "algebra": 9.1,
+   "geometry": 6.8,
+   "number_theory": 14.79,
+   "code": 2.47,
+   "web": 0.6
+  },
+  "ppl_change_pct": {
+   "biology": 0.334,
+   "chemistry": 0.612,
+   "physics": -0.015,
+   "algebra": 23.005,
+   "geometry": 11.049,
+   "number_theory": 34.276,
+   "code": 2.174,
+   "web": 0.269
+  }
+ },
+ {
+  "team": "code x4",
+  "per_layer": 4,
+  "share_of_picks_pct": {
+   "biology": 1.15,
+   "chemistry": 1.13,
+   "physics": 0.77,
+   "algebra": 1.85,
+   "geometry": 2.62,
+   "number_theory": 1.54,
+   "code": 12.39,
+   "web": 0.61
+  },
+  "ppl_change_pct": {
+   "biology": 0.037,
+   "chemistry": 0.021,
+   "physics": -0.09,
+   "algebra": 1.664,
+   "geometry": 2.944,
+   "number_theory": 0.85,
+   "code": 31.441,
+   "web": 0.096
+  }
+ },
+ {
+  "team": "web x4",
+  "per_layer": 4,
+  "share_of_picks_pct": {
+   "biology": 8.13,
+   "chemistry": 1.31,
+   "physics": 0.66,
+   "algebra": 0.54,
+   "geometry": 0.46,
+   "number_theory": 0.41,
+   "code": 0.45,
+   "web": 10.24
+  },
+  "ppl_change_pct": {
+   "biology": 8.909,
+   "chemistry": 1.816,
+   "physics": -0.004,
+   "algebra": 0.119,
+   "geometry": -0.119,
+   "number_theory": -0.001,
+   "code": -0.169,
+   "web": 1.618
+  }
+ },
+ {
+  "team": "random x4 #1",
+  "per_layer": 4,
+  "share_of_picks_pct": {
+   "biology": 1.77,
+   "chemistry": 1.72,
+   "physics": 1.65,
+   "algebra": 1.27,
+   "geometry": 1.25,
+   "number_theory": 1.22,
+   "code": 1.59,
+   "web": 1.72
+  },
+  "ppl_change_pct": {
+   "biology": 0.554,
+   "chemistry": 0.595,
+   "physics": 0.12,
+   "algebra": 0.749,
+   "geometry": 0.838,
+   "number_theory": 0.063,
+   "code": 0.648,
+   "web": 0.347
+  }
+ },
+ {
+  "team": "random x4 #2",
+  "per_layer": 4,
+  "share_of_picks_pct": {
+   "biology": 1.77,
+   "chemistry": 1.56,
+   "physics": 1.53,
+   "algebra": 1.47,
+   "geometry": 1.23,
+   "number_theory": 1.52,
+   "code": 1.37,
+   "web": 1.67
+  },
+  "ppl_change_pct": {
+   "biology": 0.303,
+   "chemistry": 0.26,
+   "physics": -0.081,
+   "algebra": 1.154,
+   "geometry": 0.56,
+   "number_theory": 0.426,
+   "code": 0.037,
+   "web": 0.625
+  }
+ },
+ {
+  "team": "biology x16",
+  "per_layer": 16,
+  "share_of_picks_pct": {
+   "biology": 32.08,
+   "chemistry": 11.27,
+   "physics": 13.48,
+   "algebra": 2.16,
+   "geometry": 1.92,
+   "number_theory": 1.96,
+   "code": 3.34,
+   "web": 15.65
+  },
+  "ppl_change_pct": {
+   "biology": 105.107,
+   "chemistry": 16.044,
+   "physics": 7.141,
+   "algebra": 0.577,
+   "geometry": 0.276,
+   "number_theory": 0.242,
+   "code": 1.14,
+   "web": 8.706
+  }
+ },
+ {
+  "team": "chemistry x16",
+  "per_layer": 16,
+  "share_of_picks_pct": {
+   "biology": 8.15,
+   "chemistry": 19.8,
+   "physics": 11.24,
+   "algebra": 4.31,
+   "geometry": 3.19,
+   "number_theory": 3.39,
+   "code": 4.34,
+   "web": 4.52
+  },
+  "ppl_change_pct": {
+   "biology": 6.213,
+   "chemistry": 41.78,
+   "physics": 6.433,
+   "algebra": 1.174,
+   "geometry": 0.954,
+   "number_theory": 0.39,
+   "code": 0.924,
+   "web": 4.305
+  }
+ },
+ {
+  "team": "physics x16",
+  "per_layer": 16,
+  "share_of_picks_pct": {
+   "biology": 13.48,
+   "chemistry": 13.91,
+   "physics": 29.06,
+   "algebra": 2.16,
+   "geometry": 2.27,
+   "number_theory": 2.61,
+   "code": 2.93,
+   "web": 5.67
+  },
+  "ppl_change_pct": {
+   "biology": 8.887,
+   "chemistry": 18.87,
+   "physics": 86.812,
+   "algebra": 0.433,
+   "geometry": 0.63,
+   "number_theory": 0.05,
+   "code": 0.427,
+   "web": 7.536
+  }
+ },
+ {
+  "team": "algebra x16",
+  "per_layer": 16,
+  "share_of_picks_pct": {
+   "biology": 2.42,
+   "chemistry": 6.53,
+   "physics": 3.07,
+   "algebra": 23.84,
+   "geometry": 16.3,
+   "number_theory": 18.94,
+   "code": 4.73,
+   "web": 3.32
+  },
+  "ppl_change_pct": {
+   "biology": 0.865,
+   "chemistry": 1.912,
+   "physics": 2.059,
+   "algebra": 66.859,
+   "geometry": 35.79,
+   "number_theory": 31.924,
+   "code": 1.592,
+   "web": 1.531
+  }
+ },
+ {
+  "team": "geometry x16",
+  "per_layer": 16,
+  "share_of_picks_pct": {
+   "biology": 2.91,
+   "chemistry": 5.52,
+   "physics": 3.48,
+   "algebra": 17.17,
+   "geometry": 34.61,
+   "number_theory": 14.03,
+   "code": 8.16,
+   "web": 3.78
+  },
+  "ppl_change_pct": {
+   "biology": 1.637,
+   "chemistry": 2.779,
+   "physics": 2.126,
+   "algebra": 32.631,
+   "geometry": 102.913,
+   "number_theory": 21.486,
+   "code": 13.117,
+   "web": 2.945
+  }
+ },
+ {
+  "team": "number_theory x16",
+  "per_layer": 16,
+  "share_of_picks_pct": {
+   "biology": 1.89,
+   "chemistry": 5.74,
+   "physics": 3.16,
+   "algebra": 20.58,
+   "geometry": 16.64,
+   "number_theory": 30.45,
+   "code": 6.71,
+   "web": 3.21
+  },
+  "ppl_change_pct": {
+   "biology": 0.719,
+   "chemistry": 2.38,
+   "physics": 2.903,
+   "algebra": 53.712,
+   "geometry": 30.231,
+   "number_theory": 71.586,
+   "code": 6.307,
+   "web": 2.162
+  }
+ },
+ {
+  "team": "code x16",
+  "per_layer": 16,
+  "share_of_picks_pct": {
+   "biology": 3.98,
+   "chemistry": 4.37,
+   "physics": 3.26,
+   "algebra": 6.34,
+   "geometry": 7.9,
+   "number_theory": 5.16,
+   "code": 30.33,
+   "web": 3.06
+  },
+  "ppl_change_pct": {
+   "biology": 0.064,
+   "chemistry": 0.218,
+   "physics": -0.055,
+   "algebra": 4.865,
+   "geometry": 9.432,
+   "number_theory": 1.815,
+   "code": 145.487,
+   "web": 0.41
+  }
+ },
+ {
+  "team": "web x16",
+  "per_layer": 16,
+  "share_of_picks_pct": {
+   "biology": 13.77,
+   "chemistry": 4.54,
+   "physics": 4.28,
+   "algebra": 2.81,
+   "geometry": 2.12,
+   "number_theory": 2.6,
+   "code": 2.4,
+   "web": 23.22
+  },
+  "ppl_change_pct": {
+   "biology": 23.307,
+   "chemistry": 3.771,
+   "physics": 1.524,
+   "algebra": 0.884,
+   "geometry": 0.596,
+   "number_theory": 0.325,
+   "code": -0.026,
+   "web": 13.274
+  }
+ },
+ {
+  "team": "random x16 #1",
+  "per_layer": 16,
+  "share_of_picks_pct": {
+   "biology": 5.99,
+   "chemistry": 5.62,
+   "physics": 5.45,
+   "algebra": 6.04,
+   "geometry": 6.61,
+   "number_theory": 5.52,
+   "code": 6.28,
+   "web": 6.04
+  },
+  "ppl_change_pct": {
+   "biology": 2.878,
+   "chemistry": 1.328,
+   "physics": 0.84,
+   "algebra": 2.857,
+   "geometry": 5.584,
+   "number_theory": 2.051,
+   "code": 3.369,
+   "web": 3.49
+  }
+ },
+ {
+  "team": "random x16 #2",
+  "per_layer": 16,
+  "share_of_picks_pct": {
+   "biology": 6.0,
+   "chemistry": 6.29,
+   "physics": 5.41,
+   "algebra": 6.38,
+   "geometry": 5.92,
+   "number_theory": 6.29,
+   "code": 6.43,
+   "web": 6.53
+  },
+  "ppl_change_pct": {
+   "biology": 2.363,
+   "chemistry": 1.824,
+   "physics": 1.287,
+   "algebra": 4.476,
+   "geometry": 3.816,
+   "number_theory": 2.994,
+   "code": 2.636,
+   "web": 2.082
+  }
+ }
+]

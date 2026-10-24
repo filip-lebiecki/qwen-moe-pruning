@@ -1,0 +1,9 @@
+{"tag": "original", "experts": 256, "ppl": {"web": 8.471, "chat": 4.029, "think": 2.501, "wikitext": 6.842, "all": 4.916}, "seconds": 334}
+{"tag": "reap-keep128", "experts": 128, "ppl": {"web": 10.598, "chat": 4.449, "think": 2.606, "wikitext": 9.958, "all": 5.914}, "seconds": 142}
+{"tag": "reap-keep64", "experts": 64, "ppl": {"web": 18.392, "chat": 7.809, "think": 3.21, "wikitext": 19.393, "all": 9.724}, "seconds": 52}
+{"tag": "reap-keep48", "experts": 48, "ppl": {"web": 24.79, "chat": 8.335, "think": 3.525, "wikitext": 25.855, "all": 11.715}, "seconds": 50}
+{"tag": "freq-keep48", "experts": 48, "ppl": {"web": 35.243, "chat": 9.212, "think": 3.872, "wikitext": 35.988, "all": 14.584}, "seconds": 50}
+{"tag": "random-keep48", "experts": 48, "ppl": {"web": 47.765, "chat": 13.875, "think": 6.685, "wikitext": 38.222, "all": 20.285}, "seconds": 50}
+{"tag": "q35-reap-k48-pruned", "experts": 48, "ppl": {"web": 24.807, "chat": 8.333, "think": 3.524, "wikitext": 25.873, "all": 11.717}, "seconds": 43}
+{"tag": "q35-reap-k48-healed-router", "experts": 48, "ppl": {"web": 36.181, "chat": 10.207, "think": 3.921, "wikitext": 42.792, "all": 15.778}, "seconds": 43}
+{"tag": "q35-reap-k48-healed-router-moe", "experts": 48, "ppl": {"web": 26.665, "chat": 8.539, "think": 3.666, "wikitext": 27.125, "all": 12.267}, "seconds": 44}

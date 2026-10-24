@@ -1,0 +1,8 @@
+{"tag": "original", "experts": 256, "ppl": {"think-code": 2.529, "py-instruct": 3.096, "all": 2.798}, "seconds": 41}
+{"tag": "code-calib-keep64", "experts": 64, "ppl": {"think-code": 2.664, "py-instruct": 3.474, "all": 3.042}, "seconds": 34}
+{"tag": "general-calib-keep64", "experts": 64, "ppl": {"think-code": 2.978, "py-instruct": 6.602, "all": 4.434}, "seconds": 35}
+{"tag": "code-calib-keep48", "experts": 48, "ppl": {"think-code": 2.821, "py-instruct": 3.688, "all": 3.225}, "seconds": 33}
+{"tag": "general-calib-keep48", "experts": 48, "ppl": {"think-code": 3.142, "py-instruct": 7.117, "all": 4.729}, "seconds": 34}
+{"tag": "code-calib-keep32", "experts": 32, "ppl": {"think-code": 3.222, "py-instruct": 4.106, "all": 3.637}, "seconds": 30}
+{"tag": "general-calib-keep32", "experts": 32, "ppl": {"think-code": 3.731, "py-instruct": 9.411, "all": 5.926}, "seconds": 30}
+{"tag": "q35-code-k48-disk", "experts": 48, "ppl": {"think-code": 2.823, "py-instruct": 3.687, "all": 3.226}, "seconds": 27}

@@ -1,0 +1,50 @@
+{
+ "prose": {
+  "position": 5,
+  "before": "A refrigerator operates on the",
+  "plain": [
+   [
+    " principle",
+    0.483
+   ],
+   [
+    " principles",
+    0.475
+   ]
+  ],
+  "mtp": [
+   [
+    " principles",
+    0.4867
+   ],
+   [
+    " principle",
+    0.4704
+   ]
+  ]
+ },
+ "code": {
+  "position": 67,
+  "before": " through each column,\n    filters out non-numeric values",
+  "plain": [
+   [
+    " (",
+    0.3804
+   ],
+   [
+    ",",
+    0.3702
+   ]
+  ],
+  "mtp": [
+   [
+    ",",
+    0.377
+   ],
+   [
+    " (",
+    0.3732
+   ]
+  ]
+ }
+}

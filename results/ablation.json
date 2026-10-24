@@ -1,0 +1,519 @@
+{
+ "n_tokens_per_domain": 16368,
+ "rows": [
+  {
+   "layer": 5,
+   "expert": null,
+   "reading": "repeat (no deletion)",
+   "ppl_change_pct": {
+    "biology": 0.0,
+    "chemistry": 0.0,
+    "physics": 0.0,
+    "algebra": 0.0,
+    "geometry": 0.0,
+    "number_theory": 0.0,
+    "code": 0.0,
+    "web": 0.0,
+    "all": 0.0
+   },
+   "code_comment_delta": 0.0,
+   "code_other_delta": 0.0
+  },
+  {
+   "layer": 5,
+   "expert": 39,
+   "reading": "algebra",
+   "ppl_change_pct": {
+    "biology": 0.0212,
+    "chemistry": 0.0111,
+    "physics": 0.0186,
+    "algebra": -0.0516,
+    "geometry": 0.0881,
+    "number_theory": -0.0264,
+    "code": -0.0633,
+    "web": 0.0882,
+    "all": 0.0107
+   },
+   "tokens_routed": 1540,
+   "routed_share_pct": {
+    "biology": 0.794,
+    "chemistry": 3.873,
+    "physics": 3.122,
+    "algebra": 0.794,
+    "geometry": 0.275,
+    "number_theory": 0.055,
+    "code": 0.11,
+    "web": 0.385
+   },
+   "delta_routed": 0.00073,
+   "delta_other": 0.0001,
+   "code_comment_delta": 0.00133,
+   "code_other_delta": -0.00093
+  },
+  {
+   "layer": 5,
+   "expert": 50,
+   "reading": "code comments",
+   "ppl_change_pct": {
+    "biology": -0.0313,
+    "chemistry": 0.0156,
+    "physics": -0.0463,
+    "algebra": 0.002,
+    "geometry": 0.0526,
+    "number_theory": -0.0098,
+    "code": -0.0458,
+    "web": 0.0448,
+    "all": -0.0023
+   },
+   "tokens_routed": 1945,
+   "routed_share_pct": {
+    "biology": 0.819,
+    "chemistry": 0.244,
+    "physics": 0.232,
+    "algebra": 1.222,
+    "geometry": 0.501,
+    "number_theory": 0.483,
+    "code": 8.058,
+    "web": 0.324
+   },
+   "delta_routed": -0.00041,
+   "delta_other": -2e-05,
+   "code_comment_delta": 0.00088,
+   "code_other_delta": -0.00066
+  },
+  {
+   "layer": 20,
+   "expert": 241,
+   "reading": "biology and medicine",
+   "ppl_change_pct": {
+    "biology": -0.0126,
+    "chemistry": 0.1332,
+    "physics": 0.0072,
+    "algebra": -0.0302,
+    "geometry": 0.0292,
+    "number_theory": 0.0268,
+    "code": -0.0252,
+    "web": 0.0019,
+    "all": 0.0163
+   },
+   "tokens_routed": 9277,
+   "routed_share_pct": {
+    "biology": 6.629,
+    "chemistry": 33.767,
+    "physics": 10.838,
+    "algebra": 0.0,
+    "geometry": 0.049,
+    "number_theory": 0.0,
+    "code": 0.324,
+    "web": 5.071
+   },
+   "delta_routed": 0.00258,
+   "delta_other": -2e-05,
+   "code_comment_delta": 0.00106,
+   "code_other_delta": -0.00045
+  },
+  {
+   "layer": 20,
+   "expert": 97,
+   "reading": "economics and environment",
+   "ppl_change_pct": {
+    "biology": 0.0151,
+    "chemistry": -0.005,
+    "physics": -0.0076,
+    "algebra": -0.0593,
+    "geometry": 0.0249,
+    "number_theory": 0.0094,
+    "code": -0.0039,
+    "web": 0.0261,
+    "all": -0.0
+   },
+   "tokens_routed": 742,
+   "routed_share_pct": {
+    "biology": 0.391,
+    "chemistry": 0.452,
+    "physics": 1.43,
+    "algebra": 0.379,
+    "geometry": 0.244,
+    "number_theory": 0.183,
+    "code": 0.287,
+    "web": 1.167
+   },
+   "delta_routed": -0.00198,
+   "delta_other": 1e-05,
+   "code_comment_delta": 0.00134,
+   "code_other_delta": -0.00025
+  },
+  {
+   "layer": 20,
+   "expert": 109,
+   "reading": "people and relationships",
+   "ppl_change_pct": {
+    "biology": -0.0027,
+    "chemistry": -0.0022,
+    "physics": 0.0088,
+    "algebra": -0.0835,
+    "geometry": -0.0108,
+    "number_theory": 0.0129,
+    "code": -0.0171,
+    "web": 0.0343,
+    "all": -0.0075
+   },
+   "tokens_routed": 221,
+   "routed_share_pct": {
+    "biology": 0.024,
+    "chemistry": 0.043,
+    "physics": 0.0,
+    "algebra": 0.177,
+    "geometry": 0.024,
+    "number_theory": 0.147,
+    "code": 0.33,
+    "web": 0.605
+   },
+   "delta_routed": -0.0011,
+   "delta_other": -7e-05,
+   "code_comment_delta": 0.00084,
+   "code_other_delta": -0.00032
+  },
+  {
+   "layer": 35,
+   "expert": 204,
+   "reading": "think tags and LaTeX",
+   "ppl_change_pct": {
+    "biology": -0.0099,
+    "chemistry": -0.0024,
+    "physics": -0.0014,
+    "algebra": -0.0142,
+    "geometry": -0.0073,
+    "number_theory": -0.0122,
+    "code": -0.0266,
+    "web": 0.0453,
+    "all": -0.0036
+   },
+   "tokens_routed": 1957,
+   "routed_share_pct": {
+    "biology": 0.33,
+    "chemistry": 0.703,
+    "physics": 0.501,
+    "algebra": 3.372,
+    "geometry": 2.499,
+    "number_theory": 3.024,
+    "code": 0.978,
+    "web": 0.55
+   },
+   "delta_routed": -0.00041,
+   "delta_other": -3e-05,
+   "code_comment_delta": -8e-05,
+   "code_other_delta": -0.00029
+  },
+  {
+   "layer": 36,
+   "expert": 173,
+   "reading": "generalist, no speciality",
+   "ppl_change_pct": {
+    "biology": -0.025,
+    "chemistry": 0.0184,
+    "physics": 0.0189,
+    "algebra": -0.0089,
+    "geometry": -0.0273,
+    "number_theory": -0.0268,
+    "code": -0.0136,
+    "web": 0.0433,
+    "all": -0.0026
+   },
+   "tokens_routed": 39,
+   "routed_share_pct": {
+    "biology": 0.0,
+    "chemistry": 0.012,
+    "physics": 0.006,
+    "algebra": 0.0,
+    "geometry": 0.006,
+    "number_theory": 0.055,
+    "code": 0.043,
+    "web": 0.116
+   },
+   "delta_routed": 0.01074,
+   "delta_other": -3e-05,
+   "code_comment_delta": -0.00026,
+   "code_other_delta": -0.00012
+  },
+  {
+   "layer": 5,
+   "expert": 172,
+   "reading": "random control",
+   "ppl_change_pct": {
+    "biology": 0.0041,
+    "chemistry": 0.0441,
+    "physics": -0.0002,
+    "algebra": -0.0451,
+    "geometry": -0.0088,
+    "number_theory": -0.0279,
+    "code": 0.0258,
+    "web": 0.1045,
+    "all": 0.0121
+   },
+   "tokens_routed": 3538,
+   "routed_share_pct": {
+    "biology": 2.487,
+    "chemistry": 3.189,
+    "physics": 2.816,
+    "algebra": 2.346,
+    "geometry": 1.289,
+    "number_theory": 2.261,
+    "code": 3.66,
+    "web": 3.568
+   },
+   "delta_routed": 0.00055,
+   "delta_other": 0.00011,
+   "code_comment_delta": 0.00171,
+   "code_other_delta": 4e-05
+  },
+  {
+   "layer": 5,
+   "expert": 55,
+   "reading": "random control",
+   "ppl_change_pct": {
+    "biology": 0.0345,
+    "chemistry": 0.0211,
+    "physics": -0.0497,
+    "algebra": 0.6426,
+    "geometry": -0.3916,
+    "number_theory": 0.0345,
+    "code": -0.0925,
+    "web": 0.005,
+    "all": 0.0251
+   },
+   "tokens_routed": 9633,
+   "routed_share_pct": {
+    "biology": 0.177,
+    "chemistry": 0.861,
+    "physics": 1.784,
+    "algebra": 11.18,
+    "geometry": 32.056,
+    "number_theory": 0.391,
+    "code": 10.264,
+    "web": 2.138
+   },
+   "delta_routed": 0.00945,
+   "delta_other": -0.00048,
+   "code_comment_delta": 0.00069,
+   "code_other_delta": -0.00117
+  },
+  {
+   "layer": 5,
+   "expert": 225,
+   "reading": "random control",
+   "ppl_change_pct": {
+    "biology": 0.056,
+    "chemistry": 0.0964,
+    "physics": 0.0084,
+    "algebra": -0.1078,
+    "geometry": 0.3666,
+    "number_theory": 0.0232,
+    "code": -0.0631,
+    "web": 0.0189,
+    "all": 0.0497
+   },
+   "tokens_routed": 6669,
+   "routed_share_pct": {
+    "biology": 4.613,
+    "chemistry": 1.87,
+    "physics": 5.676,
+    "algebra": 1.717,
+    "geometry": 11.62,
+    "number_theory": 2.151,
+    "code": 0.202,
+    "web": 12.897
+   },
+   "delta_routed": -0.00015,
+   "delta_other": 0.00053,
+   "code_comment_delta": -0.00175,
+   "code_other_delta": -0.00046
+  },
+  {
+   "layer": 20,
+   "expert": 31,
+   "reading": "random control",
+   "ppl_change_pct": {
+    "biology": 0.0286,
+    "chemistry": 0.0217,
+    "physics": 0.0212,
+    "algebra": -0.0628,
+    "geometry": 0.0553,
+    "number_theory": 0.0103,
+    "code": -0.0319,
+    "web": -0.0268,
+    "all": 0.0019
+   },
+   "tokens_routed": 1440,
+   "routed_share_pct": {
+    "biology": 0.916,
+    "chemistry": 1.094,
+    "physics": 4.857,
+    "algebra": 0.092,
+    "geometry": 0.55,
+    "number_theory": 0.269,
+    "code": 0.0,
+    "web": 1.02
+   },
+   "delta_routed": -0.00082,
+   "delta_other": 3e-05,
+   "code_comment_delta": 0.00025,
+   "code_other_delta": -0.00041
+  },
+  {
+   "layer": 20,
+   "expert": 218,
+   "reading": "random control",
+   "ppl_change_pct": {
+    "biology": -0.024,
+    "chemistry": 0.038,
+    "physics": -0.0195,
+    "algebra": -0.0346,
+    "geometry": 0.0368,
+    "number_theory": 0.0433,
+    "code": 0.0023,
+    "web": 0.0196,
+    "all": 0.0077
+   },
+   "tokens_routed": 1767,
+   "routed_share_pct": {
+    "biology": 0.257,
+    "chemistry": 1.35,
+    "physics": 1.576,
+    "algebra": 1.075,
+    "geometry": 1.503,
+    "number_theory": 0.672,
+    "code": 0.898,
+    "web": 3.464
+   },
+   "delta_routed": 0.00166,
+   "delta_other": 6e-05,
+   "code_comment_delta": 0.00165,
+   "code_other_delta": -0.00022
+  },
+  {
+   "layer": 20,
+   "expert": 17,
+   "reading": "random control",
+   "ppl_change_pct": {
+    "biology": -0.0255,
+    "chemistry": -0.0027,
+    "physics": 0.0267,
+    "algebra": -0.0226,
+    "geometry": 0.0515,
+    "number_theory": -0.0672,
+    "code": -0.0258,
+    "web": -0.0035,
+    "all": -0.0086
+   },
+   "tokens_routed": 7010,
+   "routed_share_pct": {
+    "biology": 3.281,
+    "chemistry": 6.097,
+    "physics": 7.276,
+    "algebra": 6.806,
+    "geometry": 4.087,
+    "number_theory": 3.965,
+    "code": 9.03,
+    "web": 2.285
+   },
+   "delta_routed": -0.00064,
+   "delta_other": -6e-05,
+   "code_comment_delta": 0.0007,
+   "code_other_delta": -0.0004
+  },
+  {
+   "layer": 35,
+   "expert": 53,
+   "reading": "random control",
+   "ppl_change_pct": {
+    "biology": -0.0359,
+    "chemistry": 0.0245,
+    "physics": 0.0253,
+    "algebra": -0.0174,
+    "geometry": -0.0188,
+    "number_theory": -0.01,
+    "code": 0.1158,
+    "web": 0.0622,
+    "all": 0.0182
+   },
+   "tokens_routed": 8716,
+   "routed_share_pct": {
+    "biology": 5.969,
+    "chemistry": 3.372,
+    "physics": 2.059,
+    "algebra": 2.774,
+    "geometry": 4.588,
+    "number_theory": 1.448,
+    "code": 32.228,
+    "web": 0.813
+   },
+   "delta_routed": 0.00408,
+   "delta_other": -0.0001,
+   "code_comment_delta": -0.00106,
+   "code_other_delta": 0.00149
+  },
+  {
+   "layer": 35,
+   "expert": 227,
+   "reading": "random control",
+   "ppl_change_pct": {
+    "biology": -0.0293,
+    "chemistry": 0.0117,
+    "physics": -0.0059,
+    "algebra": 0.0757,
+    "geometry": 0.9845,
+    "number_theory": 0.0096,
+    "code": -0.0321,
+    "web": 0.0294,
+    "all": 0.1299
+   },
+   "tokens_routed": 15451,
+   "routed_share_pct": {
+    "biology": 0.489,
+    "chemistry": 1.301,
+    "physics": 2.175,
+    "algebra": 24.285,
+    "geometry": 47.41,
+    "number_theory": 18.023,
+    "code": 0.403,
+    "web": 0.312
+   },
+   "delta_routed": 0.01108,
+   "delta_other": -1e-05,
+   "code_comment_delta": -0.00017,
+   "code_other_delta": -0.00034
+  },
+  {
+   "layer": 35,
+   "expert": 62,
+   "reading": "random control",
+   "ppl_change_pct": {
+    "biology": -0.0207,
+    "chemistry": 0.0195,
+    "physics": 0.0001,
+    "algebra": -0.0121,
+    "geometry": -0.03,
+    "number_theory": -0.0073,
+    "code": -0.0132,
+    "web": 0.063,
+    "all": -0.0001
+   },
+   "tokens_routed": 958,
+   "routed_share_pct": {
+    "biology": 0.0,
+    "chemistry": 0.806,
+    "physics": 2.89,
+    "algebra": 0.507,
+    "geometry": 0.153,
+    "number_theory": 0.684,
+    "code": 0.238,
+    "web": 0.574
+   },
+   "delta_routed": -0.00047,
+   "delta_other": 0.0,
+   "code_comment_delta": -0.00034,
+   "code_other_delta": -0.0001
+  }
+ ]
+}

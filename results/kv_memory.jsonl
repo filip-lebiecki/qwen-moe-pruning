@@ -1,0 +1,8 @@
+{"kv_type": "f16", "ctx": 4096, "kv_mib": 80.00, "recurrent_mib": 62.81, "compute_mib": 108.02, "model_mib": 10562.90, "projected_mib": 10813, "gpu_used_mib": 12682}
+{"kv_type": "f16", "ctx": 32768, "kv_mib": 640.00, "recurrent_mib": 62.81, "compute_mib": 136.02, "model_mib": 10562.90, "projected_mib": 11401, "gpu_used_mib": 13230}
+{"kv_type": "f16", "ctx": 131072, "kv_mib": 2560.00, "recurrent_mib": 62.81, "compute_mib": 232.02, "model_mib": 10562.90, "projected_mib": 13417, "gpu_used_mib": 15056}
+{"kv_type": "f16", "ctx": 262144, "kv_mib": 5120.00, "recurrent_mib": 62.81, "compute_mib": 360.02, "model_mib": 10562.90, "projected_mib": 16105, "gpu_used_mib": 12257}
+{"kv_type": "q8_0", "ctx": 4096, "kv_mib": 42.50, "recurrent_mib": 62.81, "compute_mib": 108.29, "model_mib": 10562.90, "projected_mib": 10776, "gpu_used_mib": 12543}
+{"kv_type": "q8_0", "ctx": 32768, "kv_mib": 340.00, "recurrent_mib": 62.81, "compute_mib": 148.29, "model_mib": 10562.90, "projected_mib": 11113, "gpu_used_mib": 12968}
+{"kv_type": "q8_0", "ctx": 131072, "kv_mib": 1360.00, "recurrent_mib": 62.81, "compute_mib": 436.29, "model_mib": 10562.90, "projected_mib": 12421, "gpu_used_mib": 14276}
+{"kv_type": "q8_0", "ctx": 262144, "kv_mib": 2720.00, "recurrent_mib": 62.81, "compute_mib": 820.29, "model_mib": 10562.90, "projected_mib": 14165, "gpu_used_mib": 12361}

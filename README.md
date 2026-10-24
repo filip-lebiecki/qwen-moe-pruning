@@ -28,5 +28,10 @@ helpers and report generators. `moe_stream.py` is the shared engine: it streams 
 time through the GPU, so the 67 GiB model fits a 16 GB card. Run from the repo root with
 `.venv/bin/python -I scripts/...`.
 
-The repo leaves out models, GGUFs, calibration data, stats, raw results, `.venv` and `llama.cpp`.
+`results/` holds the measured numbers behind the lessons: perplexity sweeps (`eval*.jsonl`),
+every benchmark answer (`bench/*.jsonl`), quantization sweep, speed, ablation and distillation logs,
+and the verbatim generation tests (`*.txt`).
+
+The repo leaves out models, GGUFs, calibration data, stats, the `.pt` tensor dumps in `results/`,
+`.venv` and `llama.cpp`.
 `scripts/00_setup.sh` and `scripts/01_download.sh` rebuild the environment and fetch the model.

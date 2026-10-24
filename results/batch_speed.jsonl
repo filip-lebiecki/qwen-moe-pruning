@@ -1,0 +1,5 @@
+{"tag": "q128-Q4_K_M", "parallel": 1, "tokens": 256, "seconds": 1.41, "total_tok_s": 181.8, "per_request_tok_s": 181.8}
+{"tag": "q128-Q4_K_M", "parallel": 2, "tokens": 512, "seconds": 1.73, "total_tok_s": 295.5, "per_request_tok_s": 147.8}
+{"tag": "q128-Q4_K_M", "parallel": 4, "tokens": 1024, "seconds": 2.88, "total_tok_s": 355.3, "per_request_tok_s": 88.8}
+{"tag": "q128-Q4_K_M", "parallel": 8, "tokens": 2048, "seconds": 4.65, "total_tok_s": 440.2, "per_request_tok_s": 55.0}
+{"tag": "q128-Q4_K_M", "parallel": 16, "tokens": 4096, "seconds": 8.4, "total_tok_s": 487.6, "per_request_tok_s": 30.5}

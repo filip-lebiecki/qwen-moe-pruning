@@ -1,5 +1,5 @@
-# Whitelist: only the lessons, the scripts and the handoff notes are tracked.
-# Models, GGUFs, data, stats, results, logs, .venv and llama.cpp stay local
+# Whitelist: only the lessons, scripts, small result files and the handoff notes are tracked.
+# Models, GGUFs, data, stats, logs, .venv and llama.cpp stay local
 # (rebuild with scripts/00_setup.sh, 01_download.sh and the numbered pipeline).
 /*
 !/.gitignore
@@ -7,5 +7,8 @@
 !/README.md
 !/learn/
 !/scripts/
+!/results/
+# raw tensor dumps (6-328 MB): routers, routing traces, ablation tokens
+/results/**/*.pt
 __pycache__/
 *.pyc

@@ -1,0 +1,21 @@
+== usage concentration: share of routed tokens taken by the top-N experts of each layer
+  top-  8: mean 10.1%  min 5.2% (layer 0)  max 14.4% (layer 38)
+  top- 32: mean 29.0%  min 18.8% (layer 2)  max 37.3% (layer 38)
+  top- 64: mean 47.6%  min 34.3% (layer 2)  max 59.4% (layer 38)
+  top-128: mean 73.7%  min 60.9% (layer 2)  max 84.2% (layer 38)
+
+== routing mass kept: fraction of top-8 assignments that land on a kept expert (REAP selection)
+  K=128: mean 64.9%  worst layer 54.4% (layer 0)
+  K= 96: mean 51.9%  worst layer 40.8% (layer 1)
+
+== criterion agreement at each K: overlap of kept sets with REAP
+  K=128: freq 73%  gate 76%  ean 84%  random 51%
+  K= 96: freq 65%  gate 69%  ean 76%  random 38%
+
+== domain specialists: experts getting >60% of their tokens from one source
+  web         :   716 experts total (per layer: early 7.8, late 22.9)
+  chat        :   286 experts total (per layer: early 3.4, late 5.5)
+  think-math  :   337 experts total (per layer: early 3.4, late 10.5)
+  think-code  :   238 experts total (per layer: early 4.1, late 4.9)
+  K=128 drops specialists: web 170  chat 64  think-math 107  think-code 101
+  K= 96 drops specialists: web 287  chat 124  think-math 140  think-code 135

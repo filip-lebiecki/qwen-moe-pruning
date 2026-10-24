@@ -1,0 +1,5 @@
+{"repo": "Qwen/Qwen3.5-2B", "type": "BF16", "gib": 3.63, "ppl": 10.6391}
+{"repo": "Qwen/Qwen3.5-2B", "type": "Q8_0", "gib": 1.93, "ppl": 10.6475}
+{"repo": "Qwen/Qwen3.5-2B", "type": "Q4_K_M", "gib": 1.22, "ppl": 11.0376}
+{"repo": "Qwen/Qwen3.5-2B", "type": "IQ4_XS", "gib": 1.14, "ppl": 11.2136}
+{"repo": "Qwen/Qwen3.5-2B", "type": "IQ3_XXS", "gib": 0.92, "ppl": 12.4818}

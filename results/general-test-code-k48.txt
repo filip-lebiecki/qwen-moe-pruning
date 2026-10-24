@@ -1,0 +1,56 @@
+Q: What is the capital of Australia, and why isn't it Sydney? Answer in 3 sentences.
+A: The capital of Australia is **A**. It isn't **Syland** (or "Sy") because capital letters are determined by the Unicode character encoding, where the uppercase letter 'A' is the direct predecessor of the lowercase letter 'a', whereas 'S' is the uppercase version of 's'. Therefore, the official capitalization of the word "Australia" is simply the first letter "A", not a hypothetical "Sy".
+   [88 tokens, 185 tok/s]
+
+Q: Write a Python function that returns the n-th Fibonacci number iteratively.
+A: Here is a Python function that calculates the n-th Fibonacci number iteratively:
+
+```python
+def fibonacci(n):
+    if n < 0:
+        raise ValueError("n must be non-negative for Fibonacci sequence")
+    if n == 0:
+        return 0
+    if n == 1:
+        return 1
+    
+    a, b = 0, 1
+    for i in range(2, n + 1):
+        a, b = b, a + b
+    return b
+
+# Example usage:
+print(fibonacci(10))  # Output: 55
+```
+
+### Explanation:
+- The function iteratively builds the sequence starting from the base cases (`F(0) = 0`, `F(1) = 1`).
+- It uses two variables (`a`, `b`) to track the current and previous values.
+- Time complexity: O(n)
+- Space complexity: O(1)
+
+This approach avoids recursion and handles large `n` efficiently.
+   [221 tokens, 188 tok/s]
+
+Q: If a train travels 180 km in 2.5 hours, what is its average speed in km/h?
+A: To find the average speed in km/h, we divide the total distance traveled by the total time taken.
+
+**Formula:**
+$$ \text{Speed} = \frac{\text{Distance}}{\text{Time}} $$
+
+**Given:**
+*   Distance = 180 km
+*   Time = 2.5 hours
+
+**Calc:**
+$$ \text{Speed} = \frac{180 \text{ km}}{2.5 \text{ h}} $$
+
+$$ \text{Speed} = \frac{180}{2.5} \text{ km/h} $$
+
+To calculate $180 / 2.5$:
+$$ 180 \div 2.5 = 72 $$
+
+**Answer:**
+The average speed is **72 km/h**.
+   [175 tokens, 186 tok/s]
+
