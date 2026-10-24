@@ -1,7 +1,7 @@
 # Handoff: MoE expert pruning of Qwen3.5-35B-A3B
 
 Read learn/README.html first: it has the full pipeline, exact commands, and results table.
-(There is no README.md any more; the HTML page is the source and is edited directly.)
+(README.md is only a short GitHub landing page; the HTML page is the source and is edited directly.)
 This file is the working context for continuing in a new session.
 
 ## Goal
