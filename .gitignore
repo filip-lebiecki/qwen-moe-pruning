@@ -4,6 +4,7 @@
 /*
 !/.gitignore
 !/CLAUDE.md
+!/README.md
 !/learn/
 !/scripts/
 __pycache__/
